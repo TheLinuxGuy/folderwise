@@ -1,0 +1,20 @@
+#!/bin/sh
+# Installed by _tools/sync_rules.py. Lints staged docs with the shared tools. Fails closed:
+# if the tools or uv are missing the commit is blocked (set DOCS_SKIP_HOOK=1 to bypass once).
+PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+if [ "$DOCS_SKIP_HOOK" = "1" ]; then
+  echo "pre-commit: DOCS_SKIP_HOOK=1, docs lint skipped" >&2
+  exit 0
+fi
+root="$(git rev-parse --show-toplevel)"
+tools="$root/../_tools"
+if [ ! -f "$tools/docs_lint.py" ]; then
+  echo "pre-commit: BLOCKED - docs tools not found at $tools." >&2
+  echo "  Keep this project folder next to _tools/ (inside the Folderwise workspace), or run: DOCS_SKIP_HOOK=1 git commit ..." >&2
+  exit 1
+fi
+if ! command -v uv >/dev/null 2>&1; then
+  echo "pre-commit: BLOCKED - uv not found on PATH (install uv, or run: DOCS_SKIP_HOOK=1 git commit ...)." >&2
+  exit 1
+fi
+cd "$root" && exec uv run --quiet "$tools/docs_lint.py" --staged

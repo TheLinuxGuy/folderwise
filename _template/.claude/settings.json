@@ -1,0 +1,22 @@
+{
+  "model": "sonnet",
+  "effortLevel": "low",
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Bash(uv run ../_tools/*)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Bash(mv *)",
+      "Bash(git mv *)"
+    ]
+  },
+  "autoMemoryEnabled": false,
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  }
+}

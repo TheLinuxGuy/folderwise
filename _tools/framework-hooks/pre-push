@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+if test "$(git config --get folderwise.pullOnly || :)" = true; then
+    echo 'Folderwise: this checkout is pull-only. Publish from the development checkout.' >&2
+    exit 1
+fi
+root=$(git rev-parse --show-toplevel)
+exec python3 "$root/_tools/framework_guard.py"

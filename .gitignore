@@ -1,0 +1,19 @@
+# Framework-only allowlist: every other root file/folder is private by default.
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/AGENTS.md
+!/LICENSE
+!/CONTRIBUTING.md
+!/uv.toml
+!/_tools/
+!/_template/
+!/docs/
+
+# Transient and local files, even inside allowed framework directories.
+**/__pycache__/
+*.py[cod]
+.DS_Store
+.env
+.env.*

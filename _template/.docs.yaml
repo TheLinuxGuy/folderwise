@@ -1,0 +1,21 @@
+schema_version: 1
+project: {{PROJECT}}
+description: {{DESCRIPTION_YAML}}
+sensitivity: {{SENSITIVITY}}   # default for new docs: public | private | restricted
+owner: human
+timezone: {{TIMEZONE}}   # IANA name; all dates/timestamps in this project use it
+review_every_default: 90d
+byline: true   # generated one-line status under each doc's title (front matter is hidden in the VS Code preview)
+# max_doc_lines: 400   # lint warns (does not fail) above this
+# toc_depth: 2         # for docs with `toc: true`: 2 = ## only, 3 = ## and ###
+# inline_table_max_rows: 8   # larger markdown tables must be generated from data/*.csv (0 = all tables)
+
+# Optional: override the allowed doc types.
+# doc_types: [overview, reference, runbook, decision, inventory, plan, log]
+
+# Optional per-project front matter fields. Types: string, int, bool, list, date.
+# Add `values: [...]` to restrict to an enum, `required: true` to enforce.
+extra_fields: {}
+#  host:   {type: string, required: false}
+#  vlan:   {type: int}
+#  system: {type: string, values: [proxmox, synology, opnsense]}

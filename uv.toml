@@ -1,0 +1,3 @@
+# Portable shared uv configuration.
+# Use uv's platform-default cache. Set UV_CACHE_DIR in your local environment
+# if you need a different location; never commit a machine-specific path here.

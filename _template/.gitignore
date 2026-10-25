@@ -1,0 +1,6 @@
+.DS_Store
+@eaDir/
+\#recycle/
+*.swp
+*~
+.claude/settings.local.json

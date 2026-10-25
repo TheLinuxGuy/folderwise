@@ -1,0 +1,9 @@
+{
+  "markdown.preview.frontMatter": "hide",
+  "markdown.validate.enabled": true,
+  "markdown.updateLinksOnFileMove.enabled": "prompt",
+  "[markdown]": {
+    "editor.wordWrap": "on",
+    "files.insertFinalNewline": true
+  }
+}
