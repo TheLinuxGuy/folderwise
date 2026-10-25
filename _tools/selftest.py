@@ -952,9 +952,10 @@ def s_ibridge():
     for name in ('_tools', '_template'):
         shutil.copytree(CTX['root'] / name, source / name, ignore=shutil.ignore_patterns('__pycache__'))
     conf = home / 'config.json'
+    sandbox_env = {}
 
     def invoke(*args, env=None):
-        return tool('icloud_bridge.py', '--config', conf, *args, env=env)
+        return tool('icloud_bridge.py', '--config', conf, *args, env={**sandbox_env, **(env or {})})
 
     def local(name, *args, cwd=None):
         return sh(['uv', 'run', '--quiet', str(source / '_tools' / name), *map(str, args)], cwd=cwd or source)
@@ -1112,6 +1113,7 @@ elif op=='validate':
         f=fake/executable
         f.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "'+str(root/'os-calls')+'"\nexit 0\n');f.chmod(0o755)
     env={'PATH':str(fake)+os.pathsep+os.environ['PATH']}
+    sandbox_env = env
     rc,out=invoke('notify-test',env=env)
     check('notification helper uses built-in script host with data arguments',rc==0 and 'display notification' in (root/'os-calls').read_text(),out)
     if sys.platform=='darwin':
@@ -1209,6 +1211,80 @@ elif op=='validate':
     (home/'bridge.log').write_text('old log\n'*150000)
     invoke('sync')
     check('local bridge log rotates instead of growing forever',(home/'bridge.previous.log').exists())
+
+    # Exercise portable CLI failure paths as well as macOS-only scheduling.
+    backup=json.loads(conf.read_text())
+    for response,reason in [('[]','ok'),('[1]','JSON objects'),
+                            ('[{"id":"x","checked":"yes"}]','boolean checked'),
+                            ('[{"id":"x","checked":false,"path":"missing.md","title":"x"}]','existing source')]:
+        if reason=='ok':
+            continue
+        cfg=dict(backup);cfg['adapters']={'alpha':[sys.executable,'-c','print('+repr(response)+')']};conf.write_text(json.dumps(cfg))
+        rc,out=invoke('plan');check('adapter contract rejects '+reason,rc==1 and reason in out,out)
+    cfg=dict(backup);cfg['adapters']={'alpha':'not an argv array'};conf.write_text(json.dumps(cfg))
+    rc,out=invoke('plan');check('adapter command must be an argument array',rc==1 and 'argv list' in out,out)
+    cfg=dict(backup);cfg['source']=str(root/'missing-source');conf.write_text(json.dumps(cfg))
+    rc,out=invoke('plan');check('missing source directory is diagnostic',rc==1 and 'unavailable' in out,out)
+    cfg=dict(backup);cfg['source']=str(home);conf.write_text(json.dumps(cfg))
+    rc,out=invoke('status');check('source cannot contain private bridge state',rc==1 and 'outside source' in out,out)
+    conf.write_text(json.dumps(backup))
+    pc=alpha/'.docs.yaml';original=pc.read_text()
+    pc.write_text(original.replace('icloud_disabled: false','icloud_disabled: "false"'))
+    rc,out=invoke('plan');check('project opt-out rejects ambiguous string booleans',rc==1 and 'must be boolean' in out,out)
+    pc.write_text(original);pc.rename(alpha/'saved-config');pc.symlink_to(alpha/'saved-config')
+    rc,out=invoke('plan');check('project config cannot be a symlink',rc==1 and 'symlink project config' in out,out)
+    pc.unlink();(alpha/'saved-config').rename(pc)
+    sh(['git','init','-q'],cwd=source)
+    child=source/'not-independent';child.mkdir();(child/'.docs.yaml').write_text(original)
+    rc,out=invoke('plan');check('project discovery requires an independent repository',rc==1 and 'independent Git' in out,out)
+    shutil.rmtree(child)
+    # An extra phone line and a generated-source toggle are unsupported edits.
+    saved=view.read_text();view.write_text(saved+'New phone line\n')
+    rc,out=invoke('sync');check('new phone lines are preserved instead of imported',rc==1 and 'only checkbox' in out,out)
+    view.write_text(saved)
+    saved=mirror.read_text();mirror.write_text(saved.replace('- [ ] CSV action','- [x] CSV action'))
+    rc,out=invoke('sync');check('generated raw checkboxes require dashboard mappings',rc==1 and 'no authoritative task mapping' in out,out)
+    mirror.write_text(saved);invoke('sync')
+    # Removing or renaming the source task while a phone edit is pending is a conflict.
+    saved=view.read_text()
+    view.write_text(saved.replace('- [ ] First task','- [x] First task'))
+    note.write_text(note.read_text().replace('First task','Renamed source task'))
+    local('docs_stamp.py','docs/checklist.md','--by','human','--summary','Rename a source task',cwd=alpha)
+    sh(['git','add','-A'],cwd=alpha);sh(['git','commit','-qm','Rename task'],cwd=alpha)
+    rc,out=invoke('sync');check('pending phone edits cannot target a disappeared task',rc==1 and 'changed or disappeared' in out,out)
+    view.write_text(saved);invoke('sync')
+    # Source already reflecting the requested state is an idempotent acknowledgement.
+    saved=view.read_text();view.write_text(saved.replace('- [ ] Renamed source task','- [x] Renamed source task'))
+    note.write_text(note.read_text().replace('- [ ] Renamed source task','- [x] Renamed source task'))
+    local('docs_stamp.py','docs/checklist.md','--by','human','--summary','Complete locally',cwd=alpha)
+    sh(['git','add','-A'],cwd=alpha);sh(['git','commit','-qm','Complete locally'],cwd=alpha)
+    head=sh(['git','rev-parse','HEAD'],cwd=alpha)[1]
+    rc,out=invoke('sync');check('already-applied phone toggle does not create another commit',rc==0 and sh(['git','rev-parse','HEAD'],cwd=alpha)[1]==head,out)
+    hook.unlink()
+    view.write_text(view.read_text().replace('- [x] Renamed source task','- [ ] Renamed source task'))
+    rc,out=invoke('sync');check('isolated transaction installs the framework hook if absent',rc==0 and '- [ ] Renamed source task' in note.read_text(),out)
+    hook.write_text(original_hook);hook.chmod(0o755)
+    # New source content cannot overwrite an unrelated vault file at the same path.
+    extra=alpha/'payload.bin';extra.write_bytes(b'owned source payload')
+    link=alpha/'docs/symlink.png';link.symlink_to(images/'a.png')
+    sh(['git','add','-A'],cwd=alpha);sh(['git','commit','-qm','Add payload and excluded link'],cwd=alpha)
+    invoke('configure','--mode','full')
+    collision=vault/'alpha/payload.bin';collision.write_bytes(b'unrelated vault payload')
+    rc,out=invoke('sync');check('new source file cannot overwrite an unowned vault collision',rc==1 and collision.read_bytes()==b'unrelated vault payload',out)
+    collision.unlink();invoke('sync')
+    check('Git symlinks are excluded from export',not (vault/'alpha/docs/symlink.png').exists())
+    invoke('configure','--mode','lean')
+    rc,out=invoke('plan');check('plan describes cleanup without removing files',rc==0 and 'REMOVE if unchanged: alpha/payload.bin' in out and collision.exists(),out)
+    invoke('sync')
+    saved=(vault/'Bridge Status.md').read_text();(vault/'Bridge Status.md').write_text('User-owned status edits\n')
+    rc,out=invoke('sync');check('status report cannot overwrite user edits',rc==1 and 'unowned edits' in out and (vault/'Bridge Status.md').read_text()=='User-owned status edits\n',out)
+    (vault/'Bridge Status.md').write_text(saved)
+    # Obstructed destination type and incomplete setup get specific diagnostics.
+    mirror.unlink();mirror.mkdir()
+    rc,out=invoke('sync');check('a directory cannot masquerade as an exported file',rc==1 and 'expected a file' in out,out)
+    mirror.rmdir();invoke('sync')
+    rc,out=tool('icloud_bridge.py','--config',root/'empty-state/config.json','setup')
+    check('setup requires explicit source and vault',rc==1 and 'requires --source and --vault' in out,out)
 
 
 SECTIONS = [
