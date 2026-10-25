@@ -57,15 +57,36 @@ The setup uses Git's persistent non-cone sparse checkout with this allowlist:
 /.gitignore
 /.gitattributes
 /AGENTS.md
+/README.md
 /LICENSE
 /uv.toml
 ```
 
-Only tracked **top-level** directories whose names begin with `_` are materialized, including future underscore-prefixed directories. Their entire contents remain available, including `_template/docs/` and the tool self-tests. Root `.gitignore` protects independent topic repositories, `.gitattributes` preserves line-ending rules, `AGENTS.md` holds framework instructions, and `uv.toml` supplies portable defaults. Git's own `.git` metadata remains. Public `docs/` (including images), `.github/`, `README.md`, `CONTRIBUTING.md`, and development-only root settings disappear from disk without staging deletions. Read the public guides on GitHub or in your separate development clone.
+Only tracked **top-level** directories whose names begin with `_` are materialized, including future underscore-prefixed directories. Their entire contents remain available, including `_template/docs/` and the tool self-tests. Root `.gitignore` protects independent topic repositories, `.gitattributes` preserves line-ending rules, `AGENTS.md` holds framework instructions, and `uv.toml` supplies portable defaults. Git's own `.git` metadata remains. README.md and LICENSE stay present by default. Public `docs/` (including images), `.github/`, `CONTRIBUTING.md`, and development-only root settings disappear from disk without staging deletions. Read the public guides on GitHub or in your separate development clone.
 
-The script requires a clean tracked working tree and no unfinished merge/rebase/cherry-pick/revert. It refuses excluded framework directories containing untracked or ignored files: move those files elsewhere, then retry. It never runs `git clean` or `git reset`, never deletes local knowledge projects, and does not move their contents. A Git failure stops the script and may leave already-applied local settings in place; review its output before retrying.
+The script requires a clean tracked working tree (except unstaged deletions of the optional root README/LICENSE when configuring minimal mode) and no unfinished merge/rebase/cherry-pick/revert. It refuses excluded framework directories containing untracked or ignored files: move those files elsewhere, then retry. It never runs `git clean` or `git reset`, never deletes local knowledge projects, and does not move their contents. A Git failure stops the script and may leave already-applied local settings in place; review its output before retrying.
 
 Minimal setup also applies the pull-only safeguards listed above, including the blocked origin push URL and framework hooks. These settings apply to this clone; they do not change the public repository. Use a separate full development clone for contributions. The script requires an `origin` remote; `--update` also requires an attached branch with an upstream.
+
+### Optional README and license files
+
+`README.md` and `LICENSE` are included by default. To omit either or both without recording a repository deletion:
+
+```sh
+python3 _tools/framework_checkout.py --minimal --omit README.md LICENSE
+```
+
+You can also simply delete either file locally, then run `python3 _tools/framework_checkout.py --update` (or `--minimal`). The script recognizes only **unstaged deletions of these two exact root files**, remembers the preference in local `folderwise.omittedRootFiles` configuration, and updates the sparse rules. `--dry-run` previews this choice without saving it. Modified files, staged deletions, and changes to required framework files still stop setup; they are never silently discarded.
+
+Once recorded, both ordinary `git pull --ff-only` and the updater keep the chosen files absent, even when upstream changes them. A bare `git pull` cannot record a new manual deletion: run the updater once after deleting a file, or use `--omit` before pulling. All repository objects are still fetched; omission controls files on disk. Your preference remains local and is not committed upstream.
+
+To restore previously omitted files and resume updating them:
+
+```sh
+python3 _tools/framework_checkout.py --minimal --include README.md LICENSE
+```
+
+Only README.md and LICENSE are optional; required Git rules, agent instructions and tool configuration cannot be omitted this way. `--full` also restores optional files and clears the saved omission preference while keeping pull-only safeguards.
 
 ### Updating a minimal checkout
 

@@ -1,6 +1,6 @@
 # Folderwise — Framework Instructions
 
-This is the Folderwise framework repository. A minimal pull-only checkout omits public docs, the root README and CI files; `python3 _tools/framework_checkout.py --update` preserves that layout. Public guides remain available at https://github.com/TheLinuxGuy/folderwise/tree/main/docs. Knowledge projects coexist as ignored sibling folders, each with its own Git repository, `AGENTS.md`, `CLAUDE.md` and `.docs.yaml`. Only directories containing `.docs.yaml` are knowledge projects; `docs/` contains public framework guides.
+This is the Folderwise framework repository. A minimal pull-only checkout omits public docs and CI files; README.md and LICENSE stay by default and can be omitted locally with `--minimal --omit README.md LICENSE`; `python3 _tools/framework_checkout.py --update` preserves that layout. Public guides remain available at https://github.com/TheLinuxGuy/folderwise/tree/main/docs. Knowledge projects coexist as ignored sibling folders, each with its own Git repository, `AGENTS.md`, `CLAUDE.md` and `.docs.yaml`. Only directories containing `.docs.yaml` are knowledge projects; `docs/` contains public framework guides.
 
 The root `.gitignore` is an allowlist. Never add knowledge projects, caches, credentials, `.obsidian/`, or nested repositories to this repository. Do not bypass `_tools/framework_guard.py`. In a pull-only deployment (`git config --get folderwise.pullOnly` is `true`), publish from the separate development checkout; do not enable pushes here.
 

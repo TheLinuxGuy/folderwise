@@ -775,10 +775,10 @@ def s_framework_checkout():
         path.write_text(text)
 
     g(upstream, "init", "-q", "-b", "main")
-    for name in (".gitignore", ".gitattributes", "AGENTS.md", "LICENSE", "uv.toml"):
+    for name in (".gitignore", ".gitattributes", "AGENTS.md", "uv.toml"):
         shutil.copy2(SRC_TOOLS.parent / name, upstream / name)
     put(upstream, "_tools/framework_checkout.py", (SRC_TOOLS / "framework_checkout.py").read_text())
-    for rel in ("README.md", "CONTRIBUTING.md", "docs/guide.md", "docs/assets/image.png", ".github/workflows/ci.yml", "ruff.toml", "_template/starter.md"):
+    for rel in ("README.md", "LICENSE", "CONTRIBUTING.md", "docs/guide.md", "docs/assets/image.png", ".github/workflows/ci.yml", "ruff.toml", "_template/starter.md"):
         put(upstream, rel)
     g(upstream, "add", "-f", ".")
     g(upstream, "commit", "-qm", "fictional upstream")
@@ -824,9 +824,9 @@ def s_framework_checkout():
     rc, out = invoke("--minimal")
     check("minimal setup succeeds", rc == 0, out)
     check("minimal removes public directories and development root files", all(not (private / p).exists()
-          for p in ("docs", ".github", "README.md", "CONTRIBUTING.md", "ruff.toml")))
+          for p in ("docs", ".github", "CONTRIBUTING.md", "ruff.toml")))
     check("minimal keeps runtime folders and required root files", all((private / p).exists()
-          for p in ("_tools", "_template", ".gitignore", ".gitattributes", "AGENTS.md", "LICENSE", "uv.toml")))
+          for p in ("_tools", "_template", ".gitignore", ".gitattributes", "AGENTS.md", "README.md", "LICENSE", "uv.toml")))
     check("minimal checkout has a clean tracked status", g(private, "status", "--porcelain", "--untracked-files=no") == "")
     check("minimal configures pull-only hooks and push safeguards", g(private, "config", "folderwise.pullOnly") == "true"
           and g(private, "config", "remote.origin.pushurl") == "no-push://folderwise-pull-only"
@@ -852,6 +852,70 @@ def s_framework_checkout():
     rc, out = invoke("--update")
     check("update CLI pulls with the minimal layout", rc == 0 and (private / "_future/update.md").is_file()
           and all(not (private / p).exists() for p in ("docs", ".github", "website")), out)
+    # Optional root-file omissions are local sparse preferences, never staged deletions.
+    (private / "README.md").unlink()
+    before = g(private, "config", "--local", "--list")
+    rc, out = invoke("--update", "--dry-run")
+    check("deletion preview reports the omission without changing config or status", rc == 0
+          and "README.md" in out and before == g(private, "config", "--local", "--list")
+          and g(private, "status", "--porcelain", "--untracked-files=no") == "D README.md", out)
+    rc, out = invoke("--update")
+    check("updater remembers a manually deleted README and leaves a clean index", rc == 0
+          and not (private / "README.md").exists() and (private / "LICENSE").is_file()
+          and g(private, "config", "folderwise.omittedRootFiles") == "README.md"
+          and g(private, "status", "--porcelain", "--untracked-files=no") == "", out)
+    for name in ("README.md", "LICENSE"):
+        put(upstream, name, "updated optional file\n")
+    g(upstream, "add", "-f", ".")
+    g(upstream, "commit", "-qm", "update optional root files")
+    rc, out = run(private, "git", "pull", "--ff-only")
+    check("direct pulls keep omitted README absent even when upstream changes it", rc == 0
+          and not (private / "README.md").exists() and (private / "LICENSE").read_text() == "updated optional file\n", out)
+    (private / "LICENSE").unlink()
+    rc, out = invoke("--minimal")
+    check("minimal setup remembers deleted LICENSE alongside previous README choice", rc == 0
+          and not (private / "LICENSE").exists() and not (private / "README.md").exists()
+          and g(private, "config", "folderwise.omittedRootFiles") == "LICENSE README.md", out)
+    rc, out = invoke("--minimal")
+    check("repeated setup preserves optional-file omissions", rc == 0
+          and not (private / "LICENSE").exists() and not (private / "README.md").exists(), out)
+    rc, out = invoke("--minimal", "--include", "README.md", "LICENSE")
+    check("include restores optional files at the current upstream version", rc == 0
+          and all((private / name).read_text() == "updated optional file\n" for name in ("README.md", "LICENSE"))
+          and g(private, "config", "folderwise.omittedRootFiles") == "", out)
+    (private / "README.md").unlink()
+    rc, out = invoke("--minimal", "--include", "README.md")
+    check("include can also undo a fresh manual deletion", rc == 0
+          and (private / "README.md").read_text() == "updated optional file\n"
+          and g(private, "status", "--porcelain", "--untracked-files=no") == "", out)
+    (private / "LICENSE").unlink()
+    g(private, "add", "-u")
+    rc, out = invoke("--minimal")
+    check("optional-file staged deletions remain protected", rc == 1 and "local changes" in out, out)
+    g(private, "restore", "--staged", "--worktree", "LICENSE")
+    put(private, "README.md", "edited README\n")
+    rc, out = invoke("--minimal", "--omit", "README.md")
+    check("omit refuses optional-file edits instead of discarding them", rc == 1 and "local changes" in out, out)
+    g(private, "restore", "README.md")
+    rc, out = invoke("--minimal", "--omit", "README.md", "LICENSE")
+    check("explicit omit supports both optional root files", rc == 0
+          and all(not (private / name).exists() for name in ("README.md", "LICENSE")), out)
+    for name in ("README.md", "LICENSE"):
+        put(upstream, name, "newer optional file\n")
+    g(upstream, "add", "-f", ".")
+    g(upstream, "commit", "-qm", "next optional root files")
+    rc, out = invoke("--update")
+    check("updater keeps both omitted root files absent through upstream edits", rc == 0
+          and all(not (private / name).exists() for name in ("README.md", "LICENSE")), out)
+    for args in (("--minimal", "--omit", "AGENTS.md"),
+                 ("--full", "--omit", "README.md"),
+                 ("--minimal", "--omit", "README.md", "--include", "README.md")):
+        rc, out = invoke(*args)
+        check(f"optional-file CLI rejects invalid request {args}", rc == 2, out)
+    g(private, "config", "folderwise.omittedRootFiles", "AGENTS.md")
+    rc, out = invoke("--minimal")
+    check("invalid stored omissions cannot hide required framework files", rc == 1 and "Invalid" in out, out)
+    g(private, "config", "folderwise.omittedRootFiles", "LICENSE README.md")
     check("setup and both update methods preserve independent repository contents and history",
           (topic / "notes.md").read_text() == "private sentinel\n" and g(topic, "rev-parse", "HEAD") == topic_head
           and g(topic, "status", "--porcelain") == "")
@@ -859,7 +923,9 @@ def s_framework_checkout():
     check("full preview leaves the minimal layout in place", rc == 0 and not (private / "docs").exists(), out)
     rc, out = invoke("--full")
     check("full checkout can be restored without enabling pushes", rc == 0 and (private / "docs/guide.md").is_file()
-          and g(private, "config", "folderwise.pullOnly") == "true", out)
+          and g(private, "config", "folderwise.pullOnly") == "true"
+          and g(private, "config", "folderwise.omittedRootFiles") == ""
+          and all((private / name).is_file() for name in ("README.md", "LICENSE")), out)
 
     # Failure paths: archive/parent repository, missing origin, detached updater, invalid CLI.
     archive = base / "archive"

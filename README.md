@@ -60,7 +60,7 @@ Choose a topic, describe its purpose, and set its sensitivity. Folderwise create
 
 Upgrades never touch your independent knowledge projects.
 
-**Want only the framework beside your own repositories?** After cloning into a new folder, preview and enable a [minimal pull-only checkout](docs/framework-checkout.md#minimal-pull-only-checkout):
+**Want only the framework beside your own repositories?** After cloning into a new folder, preview and enable a [minimal pull-only checkout](https://github.com/TheLinuxGuy/folderwise/blob/main/docs/framework-checkout.md#minimal-pull-only-checkout):
 
 ```sh
 cd ~/folderwise
@@ -68,7 +68,7 @@ python3 _tools/framework_checkout.py --minimal --dry-run
 python3 _tools/framework_checkout.py --minimal
 ```
 
-This keeps underscore-prefixed framework folders and essential root files, excluding public docs, images, the root README and CI files. Installation tests stay available in `_tools/selftest.py`. Ordinary `git pull --ff-only` preserves this layout; `python3 _tools/framework_checkout.py --update` enforces it before updating.
+This keeps underscore-prefixed framework folders and essential root files, including this README and LICENSE, while excluding public docs, images and CI files. Installation tests stay available in `_tools/selftest.py`. Ordinary `git pull --ff-only` preserves this layout; `python3 _tools/framework_checkout.py --update` enforces it before updating. If you delete `README.md` or `LICENSE`, run that updater once to remember the omission for future pulls. You can also choose explicitly with `--minimal --omit README.md LICENSE` and restore them with `--minimal --include README.md LICENSE`. Public guides remain [available online](https://github.com/TheLinuxGuy/folderwise/tree/main/docs).
 
 
 > [!TIP]

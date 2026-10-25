@@ -265,7 +265,10 @@ jobs:
           git clone --no-local --quiet "file://$GITHUB_WORKSPACE" "$RUNNER_TEMP/minimal-folderwise"
           cd "$RUNNER_TEMP/minimal-folderwise"
           python3 _tools/framework_checkout.py --minimal
-          test ! -e docs && test ! -e .github && test ! -e README.md
+          test ! -e docs && test ! -e .github
+          test -f README.md && test -f LICENSE
+          python3 _tools/framework_checkout.py --minimal --omit README.md LICENSE
+          test ! -e README.md && test ! -e LICENSE
           uv run _tools/selftest.py
 
   ci-gate:

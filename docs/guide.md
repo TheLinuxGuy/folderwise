@@ -4,7 +4,7 @@ Commands, configuration, and troubleshooting. [Back to the project overview](../
 
 ## Framework checkout setup
 
-`framework_checkout.py` configures an existing clone as a minimal pull-only installation. It keeps all tracked underscore-prefixed root folders and essential root files; public guides, images and CI files stay out of the working tree. It requires a clean tracked checkout and preserves independent topic repositories.
+`framework_checkout.py` configures an existing clone as a minimal pull-only installation. It keeps all tracked underscore-prefixed root folders and essential root files (including README.md and LICENSE by default); public guides, images and CI files stay out of the working tree. It preserves independent topic repositories and refuses tracked edits. `--minimal --omit README.md LICENSE` makes those optional files stay absent; `--minimal --include README.md LICENSE` restores them. If either is deleted manually, `--update` remembers the deletion before pulling. Run the updater once before returning to bare Git pulls.
 
 ```bash
 cd ~/folderwise && python3 _tools/framework_checkout.py --minimal --dry-run
