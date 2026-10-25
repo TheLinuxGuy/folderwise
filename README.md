@@ -24,6 +24,8 @@ You solved it once. Keep the instructions, the evidence, and the decisions somew
 
 **Requires:** Git with a configured author identity, Python 3.10+, and [uv](https://docs.astral.sh/uv/getting-started/installation/).
 
+**Platforms:** macOS and Linux (CI tests Python 3.10 and 3.15 on Linux and 3.15 on macOS). Native Windows is not supported or tested: the Git hooks are POSIX `sh` scripts, so use WSL.
+
 ```sh
 git clone https://github.com/TheLinuxGuy/folderwise.git ~/folderwise
 cd ~/folderwise
@@ -33,6 +35,8 @@ uv run _tools/new_project.py
 
 Choose a topic, describe its purpose, and set its sensitivity. Folderwise creates its Git repository, starter files, and an agent setup prompt. Give that prompt to Codex or Claude Code to shape the project, or edit the files yourself.
 
+
+Cloning is recommended because `git pull --ff-only` upgrades it. A [release archive](docs/framework-checkout.md#install-from-a-release-archive) (`.zip` or `.tar.gz` with `SHA256SUMS`, no Git history) is also available from [GitHub Releases](https://github.com/TheLinuxGuy/folderwise/releases); its [upgrade steps](docs/framework-checkout.md#upgrading-an-archive-install) never touch your projects.
 
 > [!TIP]
 > You don't need to organize your whole life first. Pick one useful question—“How do I recover this service?”—and document the answer.

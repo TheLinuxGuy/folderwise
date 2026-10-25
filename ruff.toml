@@ -1,0 +1,7 @@
+# Focused lint for definite errors only (syntax errors, undefined names, unused
+# imports and variables). No formatting or style rules: do not reformat the tools.
+target-version = "py310"
+extend-exclude = ["_template"]
+
+[lint]
+select = ["E9", "F"]

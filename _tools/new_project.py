@@ -15,7 +15,6 @@ structures for the new project (hide it with --no-prompt), or start the agent fo
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import json
 import os
 import re
@@ -101,7 +100,7 @@ def main() -> int:
         return 2
 
     try:
-        tz = ZoneInfo(args.timezone)
+        ZoneInfo(args.timezone)  # validate only
     except (ZoneInfoNotFoundError, ValueError):
         print(f"error: unknown timezone {args.timezone!r}", file=sys.stderr)
         return 2

@@ -1,0 +1,263 @@
+name: Prepare release
+
+# Manual, maintainer-only. Builds and tests the release archives from one explicit commit on main and attaches
+# them to a DRAFT GitHub Release. It never publishes: review the draft, fill in the notes, then publish it by
+# hand (see CONTRIBUTING.md "Releases"). Published releases are immutable, so a correction is a new version.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without a leading v: 1.2.3 or a pre-release such as 1.2.3-rc.1"
+        type: string
+        required: true
+      commit:
+        description: "Full commit SHA on main to release (leave empty for the current tip of main)"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  UV_VERSION: "0.13.5"
+  UV_PYTHON_DOWNLOADS: never
+  UV_NO_PROGRESS: "1"
+
+jobs:
+  prepare:
+    name: Select and validate the release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      commit: ${{ steps.commit.outputs.commit }}
+    steps:
+      - name: Require a dispatch from the default branch
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::Run this workflow from main so the packaging code is the reviewed code (got $REF)."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Validate the version
+        id: version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: python3 .github/scripts/release_build.py validate-version "$VERSION" | tee -a "$GITHUB_OUTPUT"
+      - name: Resolve the release commit (must be reachable from origin/main)
+        id: commit
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: echo "commit=$(python3 .github/scripts/release_build.py resolve-commit --commit "$COMMIT")" | tee -a "$GITHUB_OUTPUT"
+      - name: Reject an existing tag or published release
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/release_build.py check-tag-free "$TAG"
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::A published release for $TAG already exists. Published releases are immutable; choose a new version."
+            exit 1
+          fi
+      - name: Record the selection
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMIT: ${{ steps.commit.outputs.commit }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          {
+            echo "### Release selection"
+            echo "- Version: \`$VERSION\` (pre-release: $PRERELEASE)"
+            echo "- Commit: \`$COMMIT\`"
+            echo "- Dispatched by: $GITHUB_ACTOR"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  validate:
+    name: Validate the selected commit
+    needs: prepare
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.prepare.outputs.commit }}
+      release-validation: true
+
+  build:
+    name: Build archives
+    needs: [prepare, validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Packaging code (reviewed, from main)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tooling
+          persist-credentials: false
+      - name: Source (exactly the selected commit)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Build zip, tar.gz and SHA256SUMS from tracked, approved files
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: |
+          test "$(git -C source rev-parse HEAD)" = "$COMMIT"
+          python3 tooling/.github/scripts/release_build.py build --repo source --version "$VERSION" --commit "$COMMIT" --out dist --report build-report.json
+          cat dist/SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-build-report
+          path: build-report.json
+          if-no-files-found: error
+          retention-days: 7
+
+  test-archives:
+    name: Test ${{ matrix.format }} on ${{ matrix.label }}
+    needs: [prepare, build]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        label: [linux-py3.10, macos-py3.15]
+        format: [zip, tar.gz]
+        include:
+          - {label: linux-py3.10, os: ubuntu-latest, python: "3.10"}
+          - {label: macos-py3.15, os: macos-latest, python: "3.15"}
+    steps:
+      - name: Test scripts (reviewed, from main)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        id: python
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - name: Select the interpreter and an empty uv cache
+        env:
+          PYTHON_PATH: ${{ steps.python.outputs.python-path }}
+        run: |
+          echo "UV_PYTHON=$PYTHON_PATH" >> "$GITHUB_ENV"
+          echo "UV_CACHE_DIR=$RUNNER_TEMP/uv-cache-clean" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-build-report
+          path: report
+      - name: Verify checksums and extract in a fresh directory
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          FORMAT: ${{ matrix.format }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/release_build.py verify-sums --dir dist --version "$VERSION"
+          fresh="$RUNNER_TEMP/fresh-$FORMAT"
+          mkdir -p "$fresh"
+          if [ "$FORMAT" = zip ]; then
+            unzip -q "$GITHUB_WORKSPACE/dist/folderwise-$VERSION.zip" -d "$fresh"
+          else
+            tar -xzf "$GITHUB_WORKSPACE/dist/folderwise-$VERSION.tar.gz" -C "$fresh"
+          fi
+          python3 .github/scripts/release_build.py check-tree --root "$fresh/folderwise-$VERSION" --report report/build-report.json
+          echo "FRESH=$fresh/folderwise-$VERSION" >> "$GITHUB_ENV"
+      - name: Documented archive installation and fictional-project workflow
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: python3 .github/scripts/install_check.py --framework "$FRESH" --mode archive --expect-cold-cache --expect-version "$VERSION" --expect-commit "$COMMIT"
+
+  draft:
+    name: Create the draft release
+    needs: [prepare, build, test-archives]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write  # create the DRAFT release and attach assets; nothing here publishes
+    steps:
+      - name: Packaging code (reviewed, from main)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: dist
+      - name: Re-verify the assets that were tested
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: python3 .github/scripts/release_build.py verify-sums --dir dist --version "$VERSION"
+      - name: Create the draft release with all assets attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          COMMIT: ${{ needs.prepare.outputs.commit }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          existing=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .html_url")
+          if [ -n "$existing" ]; then
+            echo "::error::A release (draft or published) for $TAG already exists: $existing. Delete a stale draft or choose a new version."
+            exit 1
+          fi
+          python3 .github/scripts/release_build.py notes --version "$VERSION" --commit "$COMMIT" --out notes.md
+          flags=(--draft --target "$COMMIT" --title "Folderwise $VERSION" --notes-file notes.md --generate-notes)
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "$TAG" dist/* "${flags[@]}"
+      - name: Verify the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          COMMIT: ${{ needs.prepare.outputs.commit }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          release=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\")")
+          echo "$release" | jq '{html_url, draft, prerelease, target_commitish, assets: [.assets[] | {name, size, state}]}'
+          echo "$release" | jq -e --arg c "$COMMIT" --arg v "$VERSION" --argjson pre "$PRERELEASE" '
+            .draft == true and .prerelease == $pre and .target_commitish == $c
+            and ([.assets[].name] | sort) == (["folderwise-\($v).tar.gz", "folderwise-\($v).zip", "SHA256SUMS"] | sort)
+            and all(.assets[]; .state == "uploaded")' >/dev/null
+          {
+            echo "### Draft release ready (not published)"
+            echo "- $(echo "$release" | jq -r .html_url)"
+            echo "- Version \`$VERSION\`, commit \`$COMMIT\`, pre-release: $PRERELEASE"
+            echo "- Assets: both archives and SHA256SUMS were tested after extraction, then attached."
+            echo
+            echo "Next: open the draft, replace the compatibility and upgrade notes, confirm release immutability is enabled in the repository settings, then publish."
+          } >> "$GITHUB_STEP_SUMMARY"

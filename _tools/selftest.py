@@ -561,6 +561,112 @@ def s_docs_coverage():
         check(f"public documentation covers the .docs.yaml setting '{k}'", f"`{k}`" in readme)
 
 
+def s_cli_errors():
+    """Documented failure modes: bad arguments and wrong locations are refused with exit 2/1 and a clear message."""
+    root_cwd = CTX["root"]  # contains no .docs.yaml, so there is no project here
+    cases = [
+        ("docs_new rejects a malformed --by", ("docs_new.py", "docs/x.md", "--type", "reference", "--by", "bob"), None, 2, "--by must be"),
+        ("docs_new rejects a non-markdown path", ("docs_new.py", "docs/x.txt", "--type", "reference", "--by", "human"), None, 2, "must end in .md"),
+        ("docs_new refuses to overwrite an existing doc", ("docs_new.py", "README.md", "--type", "reference", "--by", "human"), None, 1, "already exists"),
+        ("docs_new outside a project is refused", ("docs_new.py", "docs/x.md", "--type", "reference", "--by", "human"), root_cwd, 2, "no .docs.yaml"),
+        ("docs_stamp rejects a malformed --by", ("docs_stamp.py", "README.md", "--by", "bob", "--summary", "s"), None, 2, "--by must be"),
+        ("docs_stamp rejects an empty --summary", ("docs_stamp.py", "README.md", "--by", "human", "--summary", " "), None, 2, "--summary is empty"),
+        ("docs_stamp rejects --toc with --no-toc", ("docs_stamp.py", "README.md", "--by", "human", "--summary", "s", "--toc", "--no-toc"), None, 2, "only one of"),
+        ("docs_stamp outside a project is refused", ("docs_stamp.py", "x.md", "--by", "human", "--summary", "s"), root_cwd, 2, "no .docs.yaml"),
+        ("docs_index --write needs --by", ("docs_index.py", "--write"), None, 2, "--write needs --by"),
+        ("docs_index --all cannot be combined with --write", ("docs_index.py", "--all", "--write", "--by", "human"), None, 2, "one project at a time"),
+        ("docs_index outside a project is refused", ("docs_index.py",), root_cwd, 2, "no .docs.yaml"),
+        ("docs_recent rejects a malformed --since", ("docs_recent.py", "--since", "soon"), None, 2, "--since must look like"),
+        ("docs_recent outside a project is refused", ("docs_recent.py",), root_cwd, 2, "no .docs.yaml"),
+        ("docs_stale outside a project is refused", ("docs_stale.py",), root_cwd, 2, "no .docs.yaml"),
+        ("render_tables outside a project is refused", ("render_tables.py", "--check"), root_cwd, 2, "no .docs.yaml"),
+        ("new_project rejects an invalid name", ("new_project.py", "--name", "Bad_Name", "--description", "x", "--by", "human"), root_cwd, 2, "--name must be"),
+        ("new_project refuses an existing folder", ("new_project.py", "--name", "proj", "--description", "x", "--by", "human"), root_cwd, 2, "already exists"),
+        ("new_project requires a description", ("new_project.py", "--name", "no-description", "--by", "human"), root_cwd, 2, "--description is required"),
+        ("new_project rejects a malformed --by", ("new_project.py", "--name", "bad-by", "--description", "x", "--by", "bob"), root_cwd, 2, "--by must be"),
+        ("new_project rejects an unknown timezone", ("new_project.py", "--name", "bad-tz", "--description", "x", "--by", "human", "--timezone", "Mars/Olympus"), root_cwd, 2, "unknown timezone"),
+    ]
+    for label, args, cwd, want_rc, want_text in cases:
+        rc, out = tool(*args, cwd=cwd)
+        check(label, rc == want_rc and want_text in out, f"rc={rc} {out}")
+    check("refused new_project calls leave no folder behind",
+          not any((CTX["root"] / n).exists() for n in ("Bad_Name", "no-description", "bad-sens", "bad-by", "bad-tz")))
+    rc, out = tool("docs_recent.py", "--since", "30d", "--by", "no-such-author")
+    check("docs_recent --by filters to matching authors only", rc == 0 and "no changes in the last 30d" in out, out)
+    rc, out = tool("docs_recent.py", "--since", "30d", "--limit", "1")
+    check("docs_recent --limit caps the listed rows", rc == 0 and "(showing 1)" in out and sum("proj/" in line for line in out.splitlines()) == 1, out)
+    rc, out = tool("docs_stale.py", "--fail", env={"DOCS_FAKE_NOW": "2099-01-01T10:00"})
+    check("docs_stale --fail exits 1 when something is overdue", rc == 1 and "overdue" in out, out)
+    rc, out = tool("docs_stale.py", "--within", "30", env={"DOCS_FAKE_NOW": "2027-12-01T10:00"})
+    check("docs_stale --within still lists overdue docs", rc == 0 and out.strip(), out)
+
+
+def s_failure_paths():
+    """Refusals and diagnostics of mv, render_tables, sync_rules and the doctor, on a scratch project."""
+    root = CTX["root"]
+    rc, out = sh(["uv", "run", "--quiet", str(CTX["tools"] / "new_project.py"), "--name", "fail-proj", "--description", "Failure paths",
+                  "--sensitivity", "private", "--by", "human", "--no-prompt"], cwd=root)
+    check("scratch project for failure paths is created", rc == 0, out)
+    fp = root / "fail-proj"
+    for name in ("a", "b"):
+        tool("docs_new.py", f"docs/{name}.md", "--type", "reference", "--by", "human", cwd=fp)
+
+    def mv(*args, cwd=fp):
+        return tool("docs_mv.py", *args, cwd=cwd)
+
+    rc, out = mv("mv", "docs/a.md", "docs/c.md", "--by", "bob")
+    check("docs_mv rejects a malformed --by", rc == 2 and "--by must be" in out, out)
+    rc, out = mv("mv", "docs/a.md", "docs/c.md", "--by", "human", cwd=root)
+    check("docs_mv outside a project is refused", rc == 2 and "no .docs.yaml" in out, out)
+    rc, out = mv("mv", "docs/a.md", "../elsewhere.md", "--by", "human")
+    check("docs_mv refuses a destination outside the project", rc == 1 and "outside the project" in out, out)
+    rc, out = mv("mv", "docs/missing.md", "docs/c.md", "--by", "human")
+    check("docs_mv refuses a missing source", rc == 1 and "error:" in out, out)
+    rc, out = mv("mv", "docs/a.md", "docs/b.md", "--by", "human")
+    check("docs_mv refuses to overwrite an existing doc", rc == 1 and "error:" in out, out)
+    rc, out = mv("heading", "docs/a.md", "No such heading", "Anything", "--by", "human")
+    check("docs_mv heading refuses a heading that does not exist", rc == 1 and "error:" in out, out)
+
+    (fp / "data").mkdir(exist_ok=True)
+    (fp / "data" / "t.csv").write_text("id,name\n1,alpha\n")
+    (fp / "docs" / "t.md").write_text("# T\n\n<!-- table:start src=data/t.csv -->\n<!-- table:end -->\n")
+    tool("docs_stamp.py", "docs/t.md", "--init", "--by", "human", "--summary", "t", cwd=fp)
+    rc, out = tool("render_tables.py", "--check", cwd=fp)
+    check("render_tables --check reports an out-of-date table", rc == 1 and "out of date" in out, out)
+    rc, out = tool("render_tables.py", cwd=fp)
+    check("render_tables without --by/--summary lists what it would change and refuses", rc == 2 and "would change" in out, out)
+    rc, out = tool("render_tables.py", "--by", "human", "--summary", "render", cwd=fp)
+    check("render_tables renders and stamps when given --by and --summary", rc == 0 and "rendered + stamped" in out, out)
+    rc, out = tool("render_tables.py", cwd=fp)
+    check("render_tables reports tables already current", rc == 0 and "already current" in out, out)
+
+    rc, out = tool("sync_rules.py", "no-such-project", cwd=root)
+    check("sync_rules rejects an unknown project name", rc == 2 and "unknown project" in out, out)
+    (fp / "CLAUDE.md").write_text("no import here\n")
+    rc, out = tool("sync_rules.py", "--check", "fail-proj", cwd=root)
+    check("sync_rules --check reports drift without changing anything", rc == 1 and "CLAUDE.md import" in out and (fp / "CLAUDE.md").read_text() == "no import here\n", out)
+    rc, out = tool("sync_rules.py", "fail-proj", cwd=root)
+    check("sync_rules repairs the drift", rc == 0 and "@AGENTS.md" in (fp / "CLAUDE.md").read_text(), out)
+
+    hook = fp / ".git" / "hooks" / "pre-commit"
+    original = hook.read_text()
+    hook.write_text(original + "# local edit\n")
+    rc, out = tool("docs_doctor.py", cwd=fp)
+    check("doctor warns when the hook differs from the current one", "differs from the current one" in out, out)
+    hook.chmod(0o644)
+    rc, out = tool("docs_doctor.py", cwd=fp)
+    check("doctor fails when the hook is not executable", rc == 1 and "not executable" in out, out)
+    hook.write_text(original)
+    hook.chmod(0o755)
+    rc, out = tool("docs_doctor.py", cwd=fp, env={"DOCS_SKIP_HOOK": "1"})
+    check("doctor warns when DOCS_SKIP_HOOK=1 is set", "DOCS_SKIP_HOOK=1" in out, out)
+    shutil.copytree(fp, root / "nogit-proj", ignore=shutil.ignore_patterns(".git"))
+    rc, out = tool("docs_doctor.py", cwd=root / "nogit-proj")
+    check("doctor fails for a project that is not a git repository", rc == 1 and "not a git repository" in out, out)
+    shutil.rmtree(root / "nogit-proj", ignore_errors=True)
+    shutil.rmtree(fp, ignore_errors=True)
+
+
 def s_uv_cache():
     """The public config is portable; local cache overrides work from either level."""
     root = SRC_TOOLS.parent
@@ -618,6 +724,62 @@ def s_framework_index():
     check("framework pre-push hook blocks the pull-only checkout", rc == 1 and "pull-only" in out, out)
 
 
+def s_ci_allowlist():
+    """The .gitignore allowlist and framework_guard.py agree on the exact CI/configuration files, and deny the rest."""
+    import importlib.util
+    src_root = SRC_TOOLS.parent
+    spec = importlib.util.spec_from_file_location("guard_ci_under_test", src_root / "_tools/framework_guard.py")
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    allowed = sorted(guard.CI_FILES | {f for f in guard.FILES if f not in {".gitignore", ".gitattributes"}})
+    sandbox = CTX["root"] / "ci-allowlist-sandbox"
+    (sandbox / "_tools").mkdir(parents=True)
+    shutil.copy2(src_root / ".gitignore", sandbox / ".gitignore")
+    shutil.copy2(src_root / "_tools/framework_guard.py", sandbox / "_tools/framework_guard.py")
+    sh(["git", "init", "-q", "-b", "main"], cwd=sandbox)
+    guard_cmd = [sys.executable, str(sandbox / "_tools/framework_guard.py")]
+
+    declared = {m.group(1) for m in re.finditer(r"^!/(\.github/\S*[^/\s])$", (src_root / ".gitignore").read_text(), re.M)}
+    check(".gitignore re-includes exactly the CI files the guard allows", declared == set(guard.CI_FILES),
+          f"only in .gitignore: {sorted(declared - guard.CI_FILES)}; only in guard: {sorted(guard.CI_FILES - declared)}")
+    if (src_root / ".github").is_dir():  # release archives ship only the tools, not the development-only CI files
+        check("every allowed CI/config path exists in the repository", all((src_root / f).is_file() for f in allowed),
+              str([f for f in allowed if not (src_root / f).is_file()]))
+    else:
+        check("release archive: development-only CI files are absent by design (existence check skipped)", not (src_root / ".coveragerc").exists())
+
+    for rel in allowed:
+        (sandbox / rel).parent.mkdir(parents=True, exist_ok=True)
+        (sandbox / rel).write_text("fictional placeholder\n")
+    sh(["git", "add", "-A"], cwd=sandbox)
+    rc, tracked = sh(["git", "ls-files"], cwd=sandbox)
+    check("git add -A stages every exact CI/config file", all(f in tracked.split() for f in allowed),
+          str([f for f in allowed if f not in tracked.split()]))
+    rc, out = sh(guard_cmd, cwd=sandbox)
+    check("framework guard accepts the exact CI/config files", rc == 0, out)
+
+    rogue = [".github/workflows/rogue.yml", ".github/scripts/rogue.py", ".github/secrets.env", ".github/ISSUE_TEMPLATE/bug.md",
+             ".github/workflows/__pycache__/ci.cpython-312.pyc", ".codecov-token", ".coverage", "coverage.xml", ".ci-coverage/coverage.xml",
+             "htmlcov/index.html", ".ruff_cache/CACHEDIR.TAG", "private-topic/notes.md", "codecov.yaml",
+             "_tools/.coverage", "_tools/.coverage.host.1234.abcd", "_tools/coverage.xml", "docs/htmlcov/index.html", "_tools/.ruff_cache/x"]
+    for rel in rogue:
+        (sandbox / rel).parent.mkdir(parents=True, exist_ok=True)
+        (sandbox / rel).write_text("fictional private sentinel\n")
+    sh(["git", "add", "-A"], cwd=sandbox)
+    rc, tracked = sh(["git", "ls-files"], cwd=sandbox)
+    leaked = [f for f in rogue if f in tracked.split()]
+    check("git add -A does not stage rogue .github files, tokens, coverage data or caches", not leaked, str(leaked))
+    for rel in rogue:
+        sh(["git", "add", "-f", rel], cwd=sandbox)
+        rc, out = sh(guard_cmd, cwd=sandbox)
+        check(f"framework guard rejects forced {rel}", rc == 1 and repr(rel) in out, out)
+        sh(["git", "rm", "-q", "--cached", rel], cwd=sandbox)
+    check("framework guard rejects a symlink in place of an allowed CI file", bool(guard.validate_entry("120000", ".github/workflows/ci.yml")))
+    check("framework guard allows executable CI helper scripts", guard.validate_entry("100755", ".github/scripts/ci_coverage.py") is None)
+    check("framework guard rejects a .github file that is not on the exact list", bool(guard.validate_entry("100644", ".github/workflows/other.yml")))
+    shutil.rmtree(sandbox, ignore_errors=True)
+
+
 def s_readme_commands():
     """Every command in the root README's fenced blocks must be pasteable: real tool, real flags, no <placeholders>,
     `cd` into this very folder, and in-page links that resolve."""
@@ -645,7 +807,7 @@ def s_readme_commands():
                 continue
             for i, t in enumerate(toks):  # `cd <path>` must point into this folder
                 if t == "cd" and i + 1 < len(toks):
-                    example_root = Path.home() / "folderwise"
+                    example_root = (Path.home() / "folderwise").resolve()  # resolved like `target`, so a symlinked HOME works
                     target = Path(os.path.expanduser(toks[i + 1])).resolve()
                     if target == example_root or example_root in target.parents:
                         target = root / target.relative_to(example_root)
@@ -685,8 +847,8 @@ SECTIONS = [
     ("create", s_create), ("new_doc", s_new_doc_and_index), ("stamp", s_stamp_and_hook), ("hook", s_hook_fail_closed),
     ("lint", s_lint_rules), ("timezone", s_timezone), ("links", s_links), ("toc", s_toc), ("mv", s_mv),
     ("tables", s_tables), ("stale", s_stale_index_recent), ("sync", s_sync),
-    ("doctor", s_doctor), ("layout", s_layout), ("uv_cache", s_uv_cache), ("docs_coverage", s_docs_coverage),
-    ("readme_commands", s_readme_commands), ("framework_index", s_framework_index),
+    ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache), ("docs_coverage", s_docs_coverage),
+    ("readme_commands", s_readme_commands), ("framework_index", s_framework_index), ("ci_allowlist", s_ci_allowlist),
 ]
 
 

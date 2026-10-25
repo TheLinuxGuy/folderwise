@@ -1,0 +1,12 @@
+# Keeps the commit-SHA-pinned actions current (each update arrives as a reviewable PR; the version stays in a comment).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    cooldown:
+      default-days: 7

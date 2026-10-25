@@ -1,0 +1,12 @@
+# Review these paths with extra care. They define what CI enforces, what may enter the public repository
+# index, and what ships in a release. CI cannot protect itself from a PR that edits it: a maintainer must read
+# these diffs. (The ruleset does not require code-owner approval because this is a solo-maintained
+# repository; owners are still requested automatically.)
+/.github/                      @TheLinuxGuy
+/.coveragerc                   @TheLinuxGuy
+/codecov.yml                   @TheLinuxGuy
+/ruff.toml                     @TheLinuxGuy
+/.gitignore                    @TheLinuxGuy
+/_tools/framework_guard.py     @TheLinuxGuy
+/_tools/framework-hooks/       @TheLinuxGuy
+/_tools/selftest.py            @TheLinuxGuy

@@ -1,0 +1,32 @@
+# Codecov policy. The overall 85% line-coverage gate is enforced independently in GitHub Actions
+# (.github/scripts/ci_coverage.py); Codecov provides PR feedback, history and the required
+# changed-code check (the `codecov/patch` status).
+#
+# Codecov receives LINE coverage only. It counts a partially covered branch line as a miss, which would
+# turn the agreed line thresholds into an unagreed branch threshold. Branch coverage is collected and shown
+# in the Actions job summary and the short-lived coverage artifact.
+codecov:
+  require_ci_to_pass: false  # CI status is enforced by the repository ruleset, not by Codecov
+
+coverage:
+  precision: 2
+  round: down
+  range: "85...100"
+  status:
+    project:
+      default:
+        informational: true  # history and trend only; the required overall gate lives in Actions
+        target: 85%
+    patch:
+      default:
+        target: 90%  # required: executable lines changed by a PR
+        threshold: 0%
+        if_ci_failed: error
+
+comment:
+  layout: "condensed_header, diff, files"
+  behavior: default
+  require_changes: false
+
+github_checks:
+  annotations: false

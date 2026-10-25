@@ -1,0 +1,24 @@
+# Release packaging manifest, read by .github/scripts/release_build.py.
+#
+# Every file tracked at the release commit must match exactly one rule, otherwise the build fails: a new
+# top-level file has to be classified here on purpose. Syntax: "include PATH" or "exclude PATH", where PATH is
+# one file or DIR/** for a whole directory tree. Included paths must also pass _tools/framework_guard.py.
+#
+# Archives hold what the README's archive installation needs: the tools, the project template, public guides,
+# the license and the root files that keep knowledge projects out of the framework Git index.
+include .gitattributes
+include .gitignore
+include AGENTS.md
+include CONTRIBUTING.md
+include LICENSE
+include README.md
+include uv.toml
+include _tools/**
+include _template/**
+include docs/**
+
+# Development-only: CI, coverage, lint and release configuration. Never shipped.
+exclude .github/**
+exclude .coveragerc
+exclude codecov.yml
+exclude ruff.toml
