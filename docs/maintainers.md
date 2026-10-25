@@ -8,7 +8,7 @@ Do these once. Each is something the repository files cannot do for themselves.
 
 1. **Codecov.** Sign in at codecov.io with GitHub, install the Codecov GitHub app for `TheLinuxGuy/folderwise` (free for public repositories), copy the repository upload token, and add it as an Actions secret named `CODECOV_TOKEN` (Settings > Secrets and variables > Actions). Add the same value under *Dependabot* secrets, otherwise Dependabot PRs cannot upload and `codecov/patch` never appears on them. Confirm that `codecov.yml` is picked up (Codecov shows the config on the repository page).
 2. **Actions policy** (Settings > Actions > General): workflow permissions *Read repository contents* (the workflows also declare their own minimal permissions); *Require approval for all outside collaborators* (or at least first-time contributors) for fork PR workflows; do not enable "Send write tokens to workflows from pull requests" or "Send secrets to workflows from pull requests".
-3. **Release immutability** (Settings > Releases > enable release immutability). This applies only to releases published afterwards; the GitHub documentation describes it as a repository setting and does not document an API for it, so enable it in the UI before the first release is published.
+3. **Release immutability** (Settings > Releases > enable release immutability). This applies only to releases published afterwards. It can also be set with `gh api repos/TheLinuxGuy/folderwise/immutable-releases --method PUT` (read it back with the same path and no method; `enabled` must be `true`). Enable it before the first release is published.
 4. **Merge protection** (below), applied only after the first successful CI run on `main` so the check names exist.
 
 ## Required checks and the ruleset
@@ -17,7 +17,7 @@ The default-branch ruleset requires pull requests (with **zero** required approv
 
 `CI gate` is an aggregate: it `needs` every other job and fails if any of them failed, was cancelled, or was skipped. A new CI job must be added to its `needs` list (a unit test in `.github/scripts/test_ci_scripts.py` fails otherwise), so the single required name stays stable when matrix cells change.
 
-Apply the ruleset with an authenticated `gh` (admin token) once the checks have run on `main`. Replace nothing; the check names are final:
+Apply the ruleset with an authenticated `gh` (admin token) once the checks have run on `main`. The check names are final:
 
 ```bash
 gh api repos/TheLinuxGuy/folderwise/rulesets --method POST --input - <<'JSON'
@@ -54,7 +54,7 @@ gh api repos/TheLinuxGuy/folderwise/rulesets
 gh api repos/TheLinuxGuy/folderwise/rules/branches/main
 ```
 
-Add `codecov/patch` only after you have seen it reported on a fork PR and on a documentation-only PR (see "Validating the system"). Until the ruleset is active, protection is **not** in force, whatever the files say.
+The ruleset was first applied with `CI gate` only. Add `codecov/patch` (append `{"context": "codecov/patch"}` to `required_status_checks` with `gh api repos/TheLinuxGuy/folderwise/rulesets/RULESET_ID --method PUT`) only after you have seen it reported on a documentation-only PR and a fork PR (see "Validating the system"); requiring a status that never reports blocks every merge. Until the ruleset is active, protection is **not** in force, whatever the files say.
 
 ### Reviewing changes to the guard rails
 
