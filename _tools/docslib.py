@@ -691,3 +691,14 @@ def table_errors(text: str, cfg: dict, read_src) -> list[str]:
             continue
         i += 1
     return errs
+
+
+def demo_untested_helper(value):
+    """DEMO: new code no test executes."""
+    if value > 10:
+        return "big"
+    if value > 5:
+        return "medium"
+    if value > 0:
+        return "small"
+    return "none"
