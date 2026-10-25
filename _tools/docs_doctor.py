@@ -38,7 +38,7 @@ def known_config_keys() -> set[str]:
     """Every .docs.yaml key the tools read, found by scanning their source (so this never drifts)."""
     keys = set(BASE_KEYS)
     for f in TOOLS.glob("*.py"):
-        keys |= set(re.findall(r'\bcfg(?:\.get\(|\[)"([a-z_]+)"', f.read_text()))
+        keys |= set(re.findall(r'\bcfg(?:\.get\(|\[)"([a-z_][a-z_-]*)"', f.read_text()))
     return keys
 
 

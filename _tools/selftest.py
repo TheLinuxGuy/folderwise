@@ -965,21 +965,21 @@ def s_ibridge():
         check('bridge creates ' + name, rc == 0, out)
     alpha = source / 'alpha'
     rc,out=local('docs_doctor.py',cwd=alpha)
-    check('project doctor recognizes icloud_disabled as a framework setting',rc==0 and 'unknown key' not in out,out)
+    check('project doctor recognizes filewise-ibridgesync as a framework setting',rc==0 and 'unknown key' not in out,out)
     rc, out = local('docs_new.py', 'docs/checklist.md', '--type', 'plan', '--title', 'Checklist', '--by', 'human', cwd=alpha)
     note = alpha / 'docs/checklist.md'
     note.write_text(note.read_text().replace('## Change Log', '- [ ] First task\n  - [ ] Nested task\n- [x] Completed task\n- [ ] Duplicate\n- [ ] Duplicate\n\n```md\n- [ ] Example only\n```\n\n## Change Log'))
     local('docs_stamp.py', 'docs/checklist.md', '--by', 'human', '--summary', 'Add tasks', cwd=alpha)
     sh(['git', 'add', '-A'], cwd=alpha)
     sh(['git', 'commit', '-qm', 'Add test tasks'], cwd=alpha)
-    rc, out = invoke('setup', '--source', source, '--vault', vault, '--notifications', 'off')
+    rc, out = invoke('setup', '--source', source, '--vault', vault, '--notifications', 'off', '--no-schedule')
     check('bridge setup defaults full/unlimited/five minutes', rc == 0 and json.loads(conf.read_text())['mode'] == 'full'
           and json.loads(conf.read_text())['max_image_bytes'] is None and json.loads(conf.read_text())['interval_minutes'] == 5, out)
     rc, out = invoke('setup', '--source', source, '--vault', vault)
     check('bridge refuses accidental re-setup', rc == 1 and 'exists' in out, out)
     rc, out = invoke('plan')
-    check('bridge plan exports both enabled projects without writing vault', rc == 0 and 'alpha/docs/checklist.md' in out
-          and 'beta/README.md' in out and 'disabled/' not in out and not vault.exists(), out)
+    check('bridge plan lists both opted-in projects and preserves the initialized vault', rc == 0 and 'alpha/docs/checklist.md' in out
+          and 'beta/README.md' in out and 'disabled/' not in out and vault.exists(), out)
     rc, out = invoke('sync')
     view = vault / '_Folderwise Tasks/alpha.md'
     check('bridge exports dashboard and completed tasks', rc == 0 and '## Completed tasks' in (vault / 'Tasks.md').read_text()
@@ -1184,7 +1184,7 @@ elif op=='validate':
     cfg=json.loads(conf.read_text());backup=dict(cfg)
     for changes,reason in [({'version':2},'unsupported bridge config'),({'vault':cfg['source']},'separate'),
                            ({'mode':'bad'},'invalid mode'),({'interval_minutes':None},'cannot be null'),
-                           ({'source':'relative'},'absolute paths'),({'adapters':[]},'adapters must')]:
+                           ({'source':'relative'},'absolute paths'),({'enabled':'false'},'enabled must be boolean'),({'adapters':[]},'adapters must')]:
         conf.write_text(json.dumps(dict(backup,**changes)))
         rc,out=invoke('status');check('invalid bridge config: '+reason,rc==1 and reason in out,out)
     conf.write_text(json.dumps(backup))
@@ -1229,7 +1229,7 @@ elif op=='validate':
     rc,out=invoke('status');check('source cannot contain private bridge state',rc==1 and 'outside source' in out,out)
     conf.write_text(json.dumps(backup))
     pc=alpha/'.docs.yaml';original=pc.read_text()
-    pc.write_text(original.replace('icloud_disabled: false','icloud_disabled: "false"'))
+    pc.write_text(original.replace('filewise-ibridgesync: true','filewise-ibridgesync: "true"'))
     rc,out=invoke('plan');check('project opt-out rejects ambiguous string booleans',rc==1 and 'must be boolean' in out,out)
     pc.write_text(original);pc.rename(alpha/'saved-config');pc.symlink_to(alpha/'saved-config')
     rc,out=invoke('plan');check('project config cannot be a symlink',rc==1 and 'symlink project config' in out,out)
@@ -1285,13 +1285,142 @@ elif op=='validate':
     mirror.rmdir();invoke('sync')
     rc,out=tool('icloud_bridge.py','--config',root/'empty-state/config.json','setup')
     check('setup requires explicit source and vault',rc==1 and 'requires --source and --vault' in out,out)
+    rc,out=invoke('uninstall')
+    check('uninstall cleans fully owned empty configuration folders',rc==0 and not (vault/'.obsidian').exists() and not (source/'.obsidian').exists(),out)
+
+
+def s_ibridge_setup():
+    """Verify explicit vault setup, persistent project defaults, and safe uninstall."""
+    root=CTX['root']/'obsidian-setup-sandbox';source=root/'source';source.mkdir(parents=True)
+    vault,home=root/'cloud-vault',root/'state';config=home/'config.json'
+    for name in ['_tools','_template']:
+        shutil.copytree(CTX['root']/name,source/name,ignore=shutil.ignore_patterns('__pycache__'))
+    for name in ['.gitignore','.gitattributes','AGENTS.md','uv.toml']:
+        shutil.copy2(SRC_TOOLS.parent/name,source/name)
+    for name in ['README.md','LICENSE']:(source/name).write_text('Fictional setup root\n')
+    sh(['git','init','-q','-b','main'],cwd=source);sh(['git','add','-A'],cwd=source);sh(['git','commit','-qm','Fixture framework'],cwd=source)
+    sh(['git','remote','add','origin',str(source)],cwd=source)
+    fake=root/'fakebin';fake.mkdir()
+    for name in ['osascript','launchctl']:
+        p=fake/name;p.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "'+str(root/'os-calls')+'"\nexit 0\n');p.chmod(0o755)
+    env={'PATH':str(fake)+os.pathsep+os.environ['PATH'],'HOME':str(root/'fake-home')}
+
+    def local(name,*args):
+        return sh(['uv','run','--quiet',str(source/'_tools'/name),*map(str,args)],cwd=source,env=env)
+
+    def invoke(*args):
+        return local('icloud_bridge.py','--config',config,*args)
+
+    def create(name,*extra):
+        return local('new_project.py','--name',name,'--description','Fictional opt-in lifecycle','--no-prompt',*extra)
+
+    rc,out=create('before');before=source/'before'
+    check('fresh framework creates projects with bridge sync disabled',rc==0 and 'filewise-ibridgesync:' not in '\n'.join(x for x in (before/'.docs.yaml').read_text().splitlines() if not x.startswith('#')),out)
+    check('fresh framework does not create a root vault',not (source/'.obsidian').exists() and not (source/'.folderwise-obsidian.json').exists())
+    create('explicit-off','--icloud-disabled')
+    setup=['setup','--source',source,'--vault',vault,'--notifications','off','--no-schedule']
+    rc,out=invoke(*setup,'--dry-run')
+    check('setup preview does not create vaults or enable project defaults',rc==0 and 'Preview export:' in out and 'before/README.md' in out and 'explicit-off/README.md' not in out and not vault.exists() and not config.exists()
+          and not (source/'.obsidian').exists() and 'filewise-ibridgesync: true\n' not in (before/'.docs.yaml').read_text(),out)
+    # Existing settings and device layout are always user-owned.
+    (source/'.obsidian').mkdir();(source/'.obsidian/app.json').write_text('{"userPreference":true}\n')
+    (source/'.obsidian/workspace.json').write_text('{"deviceLayout":"keep"}\n')
+    rc,out=invoke(*setup)
+    check('setup creates parent/iCloud vaults and enrolls existing projects',rc==0 and (vault/'.obsidian/app.json').exists()
+          and 'filewise-ibridgesync: true\n' in (before/'.docs.yaml').read_text(),out)
+    check('setup preserves deliberate existing project opt-outs','filewise-ibridgesync: false' in (source/'explicit-off/.docs.yaml').read_text())
+    check('setup enrollment leaves source project clean',sh(['git','status','--porcelain'],cwd=before)[1]=='')
+    check('setup persists future-project opt-in',json.loads((source/'.folderwise-obsidian.json').read_text())['enabled'] is True)
+    check('setup preserves existing settings and workspace',(source/'.obsidian/app.json').read_text()=='{"userPreference":true}\n'
+          and (source/'.obsidian/workspace.json').read_text()=='{"deviceLayout":"keep"}\n')
+    core=json.loads((vault/'.obsidian/core-plugins.json').read_text())
+    tasks=json.loads((vault/'.obsidian/plugins/obsidian-tasks-plugin/data.json').read_text())
+    dv=json.loads((vault/'.obsidian/plugins/dataview/data.json').read_text())
+    check('reviewed defaults cover core navigation and boolean task behavior',core['graph'] and core['backlink']
+          and not core['sync'] and not tasks['setDoneDate'] and not tasks['setCancelledDate']
+          and not dv['enableDataviewJs'] and not dv['taskCompletionTracking'])
+    check('defaults omit plugin executables and device workspaces',not (vault/'.obsidian/workspace.json').exists()
+          and not (vault/'.obsidian/plugins/obsidian-tasks-plugin/main.js').exists())
+    rc,out=create('after')
+    check('separate new_project process inherits enabled bridge default',rc==0 and 'filewise-ibridgesync: true\n' in (source/'after/.docs.yaml').read_text(),out)
+    rc,out=create('after-off','--icloud-disabled')
+    check('per-project flag still overrides an installed bridge',rc==0 and 'filewise-ibridgesync: false\n' in (source/'after-off/.docs.yaml').read_text(),out)
+    rc,out=invoke('plan');check('new opted-in project appears without re-running setup',rc==0 and 'after/README.md' in out and 'after-off/README.md' not in out,out)
+    (vault/'.obsidian/graph.json').write_text('{"customGraph":true}\n')
+    rc,out=invoke('vault-init');check('repeat vault initialization preserves customization',rc==0 and (vault/'.obsidian/graph.json').read_text()=='{"customGraph":true}\n',out)
+    if sys.platform=='darwin':
+        rc,out=invoke('schedule-enable');check('setup lifecycle can schedule against fake OS services',rc==0,out)
+    cli=source/'_tools/framework_checkout.py'
+    rc,out=sh([sys.executable,str(cli),'--minimal','--omit','README.md','--remove-obsidian','--dry-run'],cwd=source,env=env)
+    check('checkout helper previews removal without uninstalling',rc==0 and (source/'.folderwise-obsidian.json').exists(),out)
+    rc,out=sh([sys.executable,str(cli),'--minimal','--omit','README.md','--remove-obsidian'],cwd=source,env=env)
+    check('checkout helper can remove README and Obsidian integration together',rc==0 and not (source/'README.md').exists()
+          and not (source/'.folderwise-obsidian.json').exists() and not json.loads(config.read_text())['enabled'],out)
+    check('uninstall removes unchanged owned defaults but preserves customized files',not (vault/'.obsidian/app.json').exists()
+          and (vault/'.obsidian/graph.json').read_text()=='{"customGraph":true}\n'
+          and (source/'.obsidian/app.json').read_text()=='{"userPreference":true}\n'
+          and (source/'.obsidian/workspace.json').exists())
+    check('uninstall preserves project documents and eligibility flags',(before/'README.md').exists() and 'filewise-ibridgesync: true\n' in (before/'.docs.yaml').read_text())
+    rc,out=create('after-uninstall')
+    check('new projects default to bridge disabled after uninstall',rc==0 and 'filewise-ibridgesync: true\n' not in (source/'after-uninstall/.docs.yaml').read_text(),out)
+    rc,out=invoke('sync');check('uninstalled bridge cannot continue syncing',rc==1 and 'uninstalled' in out,out)
+    if sys.platform=='darwin':
+        check('uninstall stops the owned scheduled job',not json.loads((home/'schedule.json').read_text())['enabled'])
+    rc,out=invoke(*setup);check('reinstall restores the persistent future-project default',rc==0 and json.loads((source/'.folderwise-obsidian.json').read_text())['enabled'],out)
+    # A hook-rejected enrollment never mutates live project state or enables future defaults.
+    invoke('uninstall');create('hook-blocked')
+    hook=source/'hook-blocked/.git/hooks/pre-commit';original=hook.read_text();hook.write_text('#!/bin/sh\necho setup hook blocked >&2\nexit 1\n')
+    rc,out=invoke(*setup)
+    check('setup hook rejection preserves clean source and leaves integration disabled',rc==1 and 'setup hook blocked' in out
+          and not json.loads((source/'.folderwise-obsidian.json').read_text())['enabled']
+          and sh(['git','status','--porcelain'],cwd=source/'hook-blocked')[1]=='',out)
+    hook.write_text(original);rc,out=invoke(*setup);check('incomplete setup can retry after hook repair',rc==0,out)
+    invoke('uninstall')
+    if sys.platform=='darwin':
+        # HOME points at the test sandbox; even the plist path is isolated.
+        rc,out=invoke('setup','--source',source,'--vault',vault,'--notifications','errors')
+        calls=(root/'os-calls').read_text()
+        check('one setup command initializes sync and announces the schedule',rc==0 and 'scheduled every 5 minutes' in calls
+              and (root/'fake-home/Library/LaunchAgents/org.folderwise.ibridge.plist').exists(),out)
+        invoke('uninstall')
+    # Failed initial sync must not activate the persistent creation default.
+    cloud_readme=vault/'before/README.md';saved=cloud_readme.read_text();cloud_readme.write_text(saved+'Unsupported phone edit\n')
+    rc,out=invoke(*setup)
+    check('failed setup sync leaves future projects disabled',rc==1 and not json.loads(config.read_text())['enabled']
+          and not json.loads((source/'.folderwise-obsidian.json').read_text())['enabled'],out)
+    rc,out=create('after-failed-setup')
+    check('new process stays opted out after an incomplete setup',rc==0 and 'filewise-ibridgesync: true\n' not in (source/'after-failed-setup/.docs.yaml').read_text(),out)
+    cloud_readme.write_text(saved);rc,out=invoke(*setup);check('setup resumes after resolving a pending vault edit',rc==0,out)
+    rc,out=local('icloud_bridge.py','--config',home/'other.json',*setup)
+    check('setup refuses another configuration taking over the parent vault',rc==1 and 'another bridge configuration' in out,out)
+    assets=source/'_tools/obsidian_defaults';assets.rename(source/'_tools/saved-defaults')
+    rc,out=invoke('vault-init');check('missing defaults payload is diagnosed',rc==1 and 'defaults are missing' in out,out)
+    (source/'_tools/saved-defaults').rename(assets)
+    invoke('uninstall');create('dirty-enrollment')
+    dirty=source/'dirty-enrollment/README.md';saved=dirty.read_text();dirty.write_text(saved+'Uncommitted change\n')
+    rc,out=invoke(*setup)
+    check('setup preflight protects existing source work',rc==1 and 'commit local changes before setup' in out
+          and dirty.read_text().endswith('Uncommitted change\n'),out)
+    dirty.write_text(saved)
+    create('missing-hook');(source/'missing-hook/.git/hooks/pre-commit').unlink()
+    rc,out=invoke(*setup);check('setup enrollment still validates through a framework hook when one is missing',rc==0,out)
+    manifest=home/'vault-defaults.json';saved=manifest.read_text();record=json.loads(saved);record[str(root/'unrelated-vault')]={};manifest.write_text(json.dumps(record))
+    rc,out=invoke('uninstall');check('uninstall refuses ownership records outside its configured vaults',rc==1 and 'unrelated vault' in out,out)
+    manifest.write_text(saved);invoke('uninstall')
+    rc,out=sh([sys.executable,str(cli),'--minimal','--remove-obsidian'],cwd=source,env=env)
+    check('checkout removal is safe when integration is already uninstalled',rc==0 and 'No configured Obsidian' in out,out)
+
+    profile=source/'.folderwise-obsidian.json';profile.write_text('[]')
+    rc,out=create('bad-profile')
+    check('new_project rejects invalid persistent profiles before creating files',rc==2 and not (source/'bad-profile').exists(),out)
+    profile.unlink()
 
 
 SECTIONS = [
     ("create", s_create), ("new_doc", s_new_doc_and_index), ("stamp", s_stamp_and_hook), ("hook", s_hook_fail_closed),
     ("lint", s_lint_rules), ("timezone", s_timezone), ("links", s_links), ("toc", s_toc), ("mv", s_mv),
     ("tables", s_tables), ("stale", s_stale_index_recent), ("sync", s_sync),
-    ("ibridge", s_ibridge), ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache),
+    ("ibridge", s_ibridge), ("ibridge_setup", s_ibridge_setup), ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache),
     ("framework_checkout", s_framework_checkout), ("framework_index", s_framework_index), ("ci_allowlist", s_ci_allowlist),
 ]
 

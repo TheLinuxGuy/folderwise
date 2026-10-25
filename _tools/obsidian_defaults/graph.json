@@ -1,0 +1,8 @@
+{
+  "search": "-path:_tools -path:_template",
+  "showTags": false,
+  "showAttachments": false,
+  "hideUnresolved": true,
+  "showOrphans": true,
+  "colorGroups": []
+}

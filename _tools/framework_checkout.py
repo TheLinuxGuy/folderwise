@@ -8,11 +8,14 @@
 
 Only tracked root directories beginning with '_' are included. Root Git rules, agent
 instructions, README.md, LICENSE and uv.toml stay present by default. No knowledge project is changed.
-Requires Git 2.25+ and Python 3.10+. Archives without Git metadata cannot use this tool.
+Requires Git 2.25+ and Python 3.10+. Removing configured Obsidian integration also needs uv.
+Archives without Git metadata cannot use this tool.
 """
 from __future__ import annotations
 
 import argparse
+import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -93,6 +96,7 @@ def main() -> int:
     mode.add_argument('--minimal', action='store_true', help='enable the minimal pull-only checkout')
     mode.add_argument('--update', action='store_true', help='enable minimal checkout, then pull --ff-only')
     mode.add_argument('--full', action='store_true', help='restore full checkout; retain pull-only safeguards')
+    parser.add_argument('--remove-obsidian', action='store_true', help='uninstall the local Obsidian bridge and remove unchanged setup-owned vault defaults')
     parser.add_argument('--dry-run', action='store_true', help='check prerequisites and print the plan without changing anything')
     parser.add_argument('--omit', choices=OPTIONAL_FILES, nargs='+', default=[],
                         help='persistently omit these optional root files in minimal mode')
@@ -123,8 +127,30 @@ def main() -> int:
             print('Configure local pull-only safeguards; independent project repositories stay untouched.')
             if args.update:
                 print('Then run git pull --ff-only and reapply the sparse rules.')
+        if args.remove_obsidian:
+            print('Uninstall optional Obsidian integration; preserve customized settings and all project documents.')
         if args.dry_run:
             return 0
+        if args.remove_obsidian:
+            marker = ROOT / '.folderwise-obsidian.json'
+            if marker.is_symlink():
+                raise RuntimeError('Obsidian profile must not be a symlink.')
+            profile = json.loads(marker.read_text()) if marker.exists() else {}
+            if profile:
+                config_path = Path(profile['bridge_config'])
+                settings = json.loads(config_path.read_text())
+                if Path(settings['source']).resolve() != ROOT:
+                    raise RuntimeError('Obsidian profile belongs to a different framework source.')
+                uv = shutil.which('uv')
+                if not uv:
+                    raise RuntimeError('uv is required to uninstall the configured bridge.')
+                result = subprocess.run([uv, 'run', '--quiet', str(ROOT / '_tools/icloud_bridge.py'),
+                                         '--config', str(config_path), 'uninstall'], capture_output=True, text=True)
+                print(result.stdout, end='')
+                if result.returncode:
+                    raise RuntimeError(result.stderr.strip() or 'Obsidian uninstall failed.')
+            else:
+                print('No configured Obsidian integration to remove.')
         if args.full:
             git('sparse-checkout', 'disable')
             git('config', '--local', '--replace-all', OMIT_KEY, '')
@@ -139,7 +165,7 @@ def main() -> int:
             verify()
         print('Done. Run uv run _tools/selftest.py to verify the installation.')
         return 0
-    except (RuntimeError, OSError) as exc:
+    except (RuntimeError, OSError, ValueError, KeyError, TypeError) as exc:
         print(f'framework checkout: {exc}', file=sys.stderr)
         return 1
 

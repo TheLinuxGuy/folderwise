@@ -106,7 +106,7 @@ Every tool, flag and setting is documented in the [full guide](docs/guide.md).
 <sub>Obsidian demo with fictional notes. Cross-project links shown are demo-only; Folderwise currently validates links within each repository.</sub>
 
 
-Obsidian adds search, backlinks, and visual navigation over your files. The optional iCloud bridge adds a central iPhone task dashboard, completed-task reopening, automatic local commits on Mac, storage controls, and macOS notifications. Your repositories stay outside iCloud. [Read the setup guide →](docs/obsidian.md)
+Obsidian adds search, backlinks, and visual navigation over your files. Obsidian is opt-in: run the bridge setup to initialize vault defaults and enable sync for existing and future projects. The optional iCloud bridge adds a central iPhone task dashboard, completed-task reopening, automatic local commits on Mac, storage controls, and macOS notifications. Your repositories stay outside iCloud. [Read the setup guide →](docs/obsidian.md)
 
 > [!NOTE]
 > Your topic folders are separate repositories, ignored by the framework's Git checkout. The optional bridge copies selected project files into your own iCloud vault; Folderwise provides no hosted sync service. [Understand the layout](docs/framework-checkout.md).

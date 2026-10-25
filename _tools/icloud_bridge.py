@@ -6,7 +6,7 @@
 """Folderwise iCloud bridge: Mac-owned export and boolean task import.
 
 Commands: setup, configure, plan, sync, status, enable, disable, schedule-enable,
-schedule-disable, doctor, logs, notify-test. See docs/obsidian.md before setup.
+schedule-disable, doctor, logs, notify-test, vault-init, uninstall. See docs/obsidian.md before setup.
 """
 from __future__ import annotations
 
@@ -100,9 +100,14 @@ def safe(root, rel):
 
 
 def config_load(path):
-    settings = read_json(path)
+    return validate_settings(read_json(path), path)
+
+
+def validate_settings(settings, path):
     if not isinstance(settings, dict) or settings.get("version") != 1:
         raise ValueError("run setup first (missing or unsupported bridge config)")
+    if type(settings.get("enabled", True)) is not bool:
+        raise ValueError("enabled must be boolean")
     source, vault = Path(settings["source"]), Path(settings["vault"])
     if not source.is_absolute() or not vault.is_absolute():
         raise ValueError("source and vault must be absolute paths")
@@ -135,7 +140,7 @@ def locked(home):
         yield
 
 
-def projects(settings):
+def projects(settings, include_disabled=False):
     source = Path(settings["source"])
     if not source.is_dir():
         raise ValueError("source directory is unavailable")
@@ -146,10 +151,10 @@ def projects(settings):
         if (p / ".docs.yaml").is_symlink():
             raise ValueError(f"symlink project config: {p.name}")
         cfg = dl.load_config(p)
-        disabled = cfg.get("icloud_disabled", False)
-        if type(disabled) is not bool:
-            raise ValueError(f"{p.name}: icloud_disabled must be boolean")
-        if not disabled:
+        enabled = cfg.get("filewise-ibridgesync", False)
+        if type(enabled) is not bool:
+            raise ValueError(f"{p.name}: filewise-ibridgesync must be boolean")
+        if enabled or include_disabled:
             if Path(git(p, "rev-parse", "--show-toplevel").strip()).resolve() != p.resolve():
                 raise ValueError(f"{p.name}: expected an independent Git repository")
             result.append(p)
@@ -237,10 +242,10 @@ def adapter(settings, project, operation, changes=None):
     return tasks
 
 
-def inventory(settings):
+def inventory(settings, selected_projects=None):
     files, tasks, omissions = {}, {}, []
     total_images = 0
-    for project in projects(settings):
+    for project in (projects(settings) if selected_projects is None else selected_projects):
         names = tracked(project)
         refs, local_tasks = set(), []
         for rel in names:
@@ -500,6 +505,8 @@ def recover_export(home, vault):
 
 
 def sync(settings, home, dry=False):
+    if not settings.get("enabled", True):
+        raise ValueError("bridge is uninstalled or setup incomplete; run setup to enable it")
     vault = Path(settings['vault'])
     issues = []
     files, tasks, omissions = {}, {}, []
@@ -569,9 +576,6 @@ def sync(settings, home, dry=False):
                     removes[key] = before
             save(home / 'export.json', dict(writes=writes, removes=removes, state={'files': next_files, 'tasks': tasks}))
             recover_export(home, vault)
-            app = safe(vault, '.obsidian/app.json')
-            if not app.exists():
-                atomic(app, b'{\"useMarkdownLinks\":true,\"newLinkFormat\":\"relative\",\"alwaysUpdateLinks\":false}\n')
         except (ValueError, OSError) as exc:
             issues.append(str(exc))
     managed_bytes = 0
@@ -644,9 +648,161 @@ def schedule(settings, config_path, enable):
     print(message)
 
 
+def seed_vaults(settings, home):
+    """Create reviewed defaults only where a setting file does not already exist."""
+    defaults = TOOLS / 'obsidian_defaults'
+    if not defaults.is_dir():
+        raise ValueError('Obsidian defaults are missing from this framework installation')
+    manifest = read_json(home / 'vault-defaults.json', {})
+    for root in (Path(settings['source']), Path(settings['vault'])):
+        owned = manifest.setdefault(str(root), {})
+        for asset in sorted(defaults.rglob('*')):
+            if not asset.is_file() or asset.is_symlink():
+                continue
+            rel = '.obsidian/' + asset.relative_to(defaults).as_posix()
+            target = safe(root, rel)
+            if target.exists():
+                if rel not in owned:
+                    print(f'Preserved existing setting: {root.name}/{rel}')
+                continue
+            atomic(target, asset)
+            owned[rel] = content_hash(asset)
+            # Retain ownership even if setup is interrupted between setting files.
+            save(home / 'vault-defaults.json', manifest)
+
+
+def enroll_project(project, home):
+    """Commit the setting in a disposable clone, without touching a live index."""
+    head = git(project, 'rev-parse', 'HEAD').strip()
+    work = home / 'enroll-work'
+    work.mkdir(exist_ok=True)
+    link = work / '_tools'
+    if not link.exists():
+        link.symlink_to(TOOLS, target_is_directory=True)
+    clone = work / project.name
+    if clone.exists():
+        shutil.rmtree(clone)
+    try:
+        run(['git', 'clone', '--quiet', '--shared', project, clone])
+        hooks = Path(git(project, 'rev-parse', '--git-path', 'hooks').strip())
+        if not hooks.is_absolute():
+            hooks = project / hooks
+        if hooks.is_dir():
+            shutil.copytree(hooks, clone / '.git/hooks', dirs_exist_ok=True)
+        if not (clone / '.git/hooks/pre-commit').exists():
+            dl.install_hook(clone, TOOLS)
+        for key in ('user.name', 'user.email'):
+            r = subprocess.run(['git', '-C', project, 'config', '--get', key], capture_output=True, text=True)
+            if r.returncode == 0:
+                git(clone, 'config', key, r.stdout.strip())
+        target = clone / '.docs.yaml'
+        target.write_text(target.read_text() + '\nfilewise-ibridgesync: true\n')
+        dl.load_config(clone)
+        git(clone, 'add', '--', '.docs.yaml')
+        git(clone, 'commit', '--quiet', '-m', 'Enable project participation in the Obsidian iCloud bridge', '-m',
+            'Record the user-selected bridge setup. Task imports remain subject to project validation and hooks.\n\nBridge: folderwise-ibridge')
+        if git(project, 'status', '--porcelain') or git(project, 'rev-parse', 'HEAD').strip() != head:
+            raise ValueError(f'{project.name}: source changed during setup; retry after review')
+        git(project, 'fetch', '--quiet', '--no-tags', str(clone), 'HEAD')
+        git(project, 'merge', '--quiet', '--ff-only', 'FETCH_HEAD')
+    finally:
+        if clone.exists():
+            shutil.rmtree(clone)
+
+
+def setup_bridge(settings, path, dry=False):
+    source = Path(settings['source'])
+    roots = projects(settings, include_disabled=True)
+    enrollment = []
+    for project in roots:
+        cfg = dl.load_config(project)
+        # Missing means not configured yet; an explicit false remains an opt-out.
+        if 'filewise-ibridgesync' not in cfg:
+            if git(project, 'status', '--porcelain'):
+                raise ValueError(f'{project.name}: commit local changes before setup enrolls this project')
+            git(project, 'ls-files', '--error-unmatch', '.docs.yaml')
+            enrollment.append(project)
+    marker = safe(source, '.folderwise-obsidian.json')
+    previous = read_json(marker, {})
+    if previous and previous.get('bridge_config') != str(path):
+        raise ValueError('another bridge configuration owns the local Obsidian setup')
+    print(f"Initialize parent vault: {source}; iCloud vault: {settings['vault']}")
+    print('New projects will default to filewise-ibridgesync: true; --icloud-disabled opts out.')
+    print('Enroll unconfigured projects: ' + (', '.join(p.name for p in enrollment) or 'none'))
+    print('Preserve explicit project opt-outs and existing Obsidian settings. Install Tasks/Dataview through Obsidian.')
+    if dry:
+        eligible = [p for p in roots if p in enrollment or dl.load_config(p).get('filewise-ibridgesync', False)]
+        files, _, omissions = inventory(settings, selected_projects=eligible)
+        print(f"Preview export: {len(files)} files / {sum(content_size(data) for data in files.values()):,} bytes; {len(omissions)} omissions")
+        for key, data in files.items():
+            print(f"COPY {key}: {content_size(data)} bytes")
+        for item in omissions:
+            print(f"SKIP {item['path']}: {item['reason']}")
+        return 0
+    # An incomplete setup does not change defaults for future projects or enable sync.
+    save(path, dict(settings, enabled=False))
+    save(marker, {'version': 1, 'enabled': False, 'bridge_config': str(path)})
+    seed_vaults(settings, path.parent)
+    for project in enrollment:
+        enroll_project(project, path.parent)
+    settings['enabled'] = True
+    save(path, settings)
+    result = sync(settings, path.parent)
+    if result:
+        settings['enabled'] = False
+        save(path, settings)
+        return result
+    save(marker, {'version': 1, 'enabled': True, 'bridge_config': str(path)})
+    print('Obsidian defaults installed. Community-plugin code and device workspace layouts were not copied.')
+    return 0
+
+
+def uninstall_bridge(settings, path):
+    """Disable integration and remove only unchanged, setup-owned setting files."""
+    home = path.parent
+    if read_json(home / 'schedule.json', {}).get('enabled'):
+        schedule(settings, path, False)
+    settings['enabled'] = False
+    save(path, settings)
+    marker = safe(Path(settings['source']), '.folderwise-obsidian.json')
+    profile = read_json(marker, {})
+    if profile.get('bridge_config') == str(path):
+        marker.unlink()
+    manifest = read_json(home / 'vault-defaults.json', {})
+    allowed = {settings['source'], settings['vault']}
+    retained = {}
+    for folder, entries in manifest.items():
+        if folder not in allowed:
+            raise ValueError('defaults manifest names an unrelated vault; inspect it before uninstalling')
+        root = Path(folder)
+        for rel, expected in entries.items():
+            if not rel.startswith('.obsidian/'):
+                raise ValueError('defaults manifest contains an unmanaged path')
+            p = safe(root, rel)
+            if not p.exists():
+                continue
+            if p.is_file() and content_hash(p) == expected:
+                p.unlink()
+                print(f'Removed setup default: {root.name}/{rel}')
+                for parent in p.parents:
+                    if parent == root:
+                        break
+                    try:
+                        parent.rmdir()
+                    except OSError:
+                        break
+            else:
+                retained.setdefault(folder, {})[rel] = expected
+                print(f'Preserved customized setting: {root.name}/{rel}')
+    save(home / 'vault-defaults.json', retained)
+    print('Bridge uninstalled. New projects default to sync disabled. Documents, project flags, plugins and recovery state were preserved.')
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", type=Path, default=DEFAULT_HOME / "config.json")
+    ap.add_argument("--dry-run", action="store_true", help="preview setup without changing vaults, projects or defaults")
+    ap.add_argument("--no-schedule", action="store_true", help="initialize and sync without registering a macOS job")
     ap.add_argument("--source", type=Path)
     ap.add_argument("--vault", type=Path)
     ap.add_argument("--mode", choices=["full", "lean"])
@@ -655,20 +811,25 @@ def main():
     ap.add_argument("--max-images-total-bytes", type=int)
     ap.add_argument("--unlimited-images", action="store_true")
     ap.add_argument("--notifications", choices=["off", "errors"])
-    ap.add_argument("command", choices=["setup", "configure", "plan", "sync", "status", "enable", "disable", "schedule-enable", "schedule-disable", "doctor", "logs", "notify-test"])
+    ap.add_argument("command", choices=["setup", "configure", "plan", "sync", "status", "enable", "disable", "schedule-enable", "schedule-disable", "doctor", "logs", "notify-test", "vault-init", "uninstall"])
     ap.add_argument("project", nargs="?")
     args = ap.parse_args()
     path = args.config.expanduser().absolute()
     try:
         with locked(path.parent):
             if args.command == "setup":
-                if path.exists():
-                    raise ValueError("config exists; use configure")
+                if path.exists() and config_load(path).get('enabled', True):
+                    raise ValueError("config exists; use configure or vault-init")
                 if not args.source or not args.vault:
                     raise ValueError("setup requires --source and --vault")
                 settings = dict(version=1, source=str(args.source.expanduser().resolve()), vault=str(args.vault.expanduser().resolve()),
                            mode="full", interval_minutes=5, max_image_bytes=None, max_images_total_bytes=None,
-                           notifications="errors", adapters={})
+                           notifications="errors", adapters={}, enabled=False)
+                if path.exists():
+                    previous = config_load(path)
+                    if (previous['source'], previous['vault']) != (settings['source'], settings['vault']):
+                        raise ValueError('reinstall must use the original source and vault; use a new config for another installation')
+                    settings = previous
             else:
                 settings = config_load(path)
             if args.command in {"setup", "configure"}:
@@ -684,21 +845,32 @@ def main():
                     config_load(candidate)
                 finally:
                     candidate.unlink(missing_ok=True)
-                save(path, settings)
-                print(f"Configured {settings['mode']} mode; interval {settings['interval_minutes']} minutes. Run plan, sync, then schedule-enable.")
+                if args.command == 'setup':
+                    result = setup_bridge(settings, path, args.dry_run)
+                    if result or args.dry_run or args.no_schedule:
+                        return result
+                else:
+                    save(path, settings)
+                    print(f"Configured {settings['mode']} mode; interval {settings['interval_minutes']} minutes. Reload scheduling if the interval changed.")
+                    return 0
+            if args.command == 'vault-init':
+                seed_vaults(settings, path.parent)
+                return 0
+            if args.command == 'uninstall':
+                uninstall_bridge(settings, path)
                 return 0
             if args.command in {"enable", "disable"}:
                 if not args.project or args.project.startswith(("_", ".")) or "/" in args.project:
                     raise ValueError("provide a project folder name")
                 project = safe(Path(settings["source"]), args.project)
                 pc = dl.load_config(project)
-                pc["icloud_disabled"] = args.command == "disable"
+                pc["filewise-ibridgesync"] = args.command == "enable"
                 atomic(project / ".docs.yaml", yaml.safe_dump(pc, sort_keys=False).encode())
-                print(f"{args.project}: icloud_disabled={pc['icloud_disabled']}; commit this project setting when ready")
+                print(f"{args.project}: filewise-ibridgesync={pc['filewise-ibridgesync']}; commit this project setting when ready")
                 return 0
             if args.command in {"sync", "plan"}:
                 return sync(settings, path.parent, args.command == "plan")
-            if args.command.startswith("schedule-"):
+            if args.command.startswith("schedule-") or args.command == "setup":
                 if args.command == "schedule-enable" and sync(settings, path.parent):
                     raise ValueError("resolve sync errors before scheduling")
             elif args.command == "notify-test":
@@ -730,8 +902,8 @@ def main():
             else:
                 print(json.dumps({"config": settings, "last_run": read_json(path.parent / "last-run.json", {}),
                                   "schedule": read_json(path.parent / "schedule.json", {}), "schedule_plist": str(Path(settings.get("launchagents_dir", str(Path.home() / "Library/LaunchAgents"))) / (LABEL + ".plist"))}, indent=2))
-        if args.command.startswith("schedule-"):
-            schedule(settings, path, args.command == "schedule-enable")
+        if args.command.startswith("schedule-") or args.command == "setup":
+            schedule(settings, path, args.command != "schedule-disable")
         return 0
     except (ValueError, OSError, KeyError, TypeError, yaml.YAMLError) as exc:
         print(f"icloud-bridge: {exc}", file=sys.stderr)

@@ -12,19 +12,37 @@ Use the same Apple account on Mac and iPhone and enable iCloud Drive. Keep the M
 
 The Mac needs Git, uv, the Folderwise tools, a configured Git author, and an active login session for scheduled operation. Only committed, tracked project files are eligible for export; commit new documents on Mac before expecting them on iPhone. Never commit credentials merely to make them eligible. Existing source edits can be read, but pending phone imports wait until that project's working tree and index are clean.
 
-## Set up and preview
+## Explicit setup and reusable vault defaults
 
-These commands use fictional paths. Replace the vault path with the separate vault you created in Obsidian. Run them from the framework checkout:
+Obsidian is **off by default**. A fresh clone does not create `.obsidian/`, start a bridge job, or enable new projects for export. Choose a parent source directory outside iCloud and a separate destination under `iCloud Drive/Obsidian/`. The script initializes both as vault folders; open the iCloud vault in Obsidian on your devices afterward. Use fictional data for the first test.
+
+Preview the complete setup, then run it (replace these fictional paths as needed):
 
 ```sh
+uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Folderwise" --dry-run
 uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Folderwise"
-uv run _tools/icloud_bridge.py plan
-uv run _tools/icloud_bridge.py sync
 ```
 
-`setup` writes local configuration; it does not start a background job. `plan` lists selected files, estimated bytes, omissions, and proposed cleanup without writing the vault or changing tasks. `sync` performs a foreground import/export. The first successful sync creates private `.obsidian/app.json` defaults only if absent: relative Markdown links and automatic link renaming disabled. It preserves existing Obsidian settings. Actual `.obsidian/` folders never enter the public framework repository.
+Setup creates the local parent vault alongside your project folders and a separate iCloud vault, installs missing settings, enrolls existing unconfigured projects, records the default for future projects, runs the initial sync, and registers the macOS schedule. `--no-schedule` performs setup and foreground sync without registering a job; use it on non-Mac systems and in test sandboxes. The setup notification announces the configured interval after the job is registered. `setup --dry-run` previews eligible files, estimated bytes, omissions and project enrollment without changing vaults, project flags or future-project defaults.
 
-Configuration, baselines, temporary transaction clones, recovery journal and logs stay outside iCloud. On Mac the default location is `~/Library/Application Support/Folderwise/ibridge/`. Use `--config /absolute/path/config.json` before the command for another private installation. Keep this directory: deleting baselines removes the bridge's knowledge of pending edits and owned files. The source and vault must not contain one another; configuration/state must be outside both.
+The framework ships reviewed defaults in `_tools/obsidian_defaults/`, not a live `.obsidian/` directory:
+
+| Defaults | Behavior |
+| --- | --- |
+| `app.json` | Relative Markdown links, no automatic link renames, reading view and no duplicate inline title |
+| `appearance.json` and snippet | Default theme, readable font and tabular numerals in tables |
+| `core-plugins.json` | Search, graph, backlinks, outline, properties, Bases and recovery; competing sync/publish disabled |
+| `graph.json` | General navigation settings without private project names or demo color groups |
+| `types.json` | Shared document property types, without demo query fields |
+| `community-plugins.json` and plugin settings | Tasks/Dataview IDs; automatic task dates and Dataview JavaScript disabled |
+
+**Community-plugin binaries are not bundled or downloaded.** Install Tasks and optional Dataview through Obsidian's community-plugin browser, then enable them. Setup seeds their settings; it does not bypass Obsidian's Restricted mode. See [Obsidian's community-plugin guide](https://help.obsidian.md/community-plugins). Device-specific `workspace.json`, caches and installed plugin code are never copied from the demo.
+
+Existing setting files are preserved in full. If you already have Tasks settings, confirm automatic dates are off; setup does not replace your preferences. `vault-init` fills missing defaults later without overwriting customization. Vaults become available when opened in Obsidian; the helper does not edit Obsidian's global vault registry.
+
+Configuration, ownership records, baselines, temporary clones, export journal and logs stay outside iCloud. On Mac the default state directory is `~/Library/Application Support/Folderwise/ibridge/`. A private `.folderwise-obsidian.json` at the source root records whether the integration is enabled and points to that configuration. `new_project.py` reads it in each new process. Neither file is committed to the framework. Use `--config /absolute/path/config.json` before a bridge command for another private installation. Keep recovery state: deleting it removes knowledge of pending edits and owned files. Source, vault and state directories must remain separate.
+
+`plan` previews ordinary export/cleanup; `sync` performs a foreground run. They never recreate removed Obsidian settings. New or missing defaults are installed only through explicit setup or `vault-init`.
 
 ## Central task dashboard
 
@@ -64,24 +82,43 @@ Adapters run in a temporary local Git clone with the project's hooks, not direct
 
 Handwritten tasks use file/text identity plus duplicate occurrence. Line shifts alone do not identify a task. If identical task text occurs more than once and that source file changes concurrently, the bridge stops for review rather than guessing which duplicate moved. Changed task text or a source rename can also require review.
 
-## Project participation
+## Project participation and persistent creation defaults
 
-All knowledge projects participate by default, including existing projects without an explicit setting. This applies regardless of `sensitivity`: enabling the bridge exports eligible restricted content too. `_template/` and framework folders are not knowledge projects.
+The positive `.docs.yaml` key is **`filewise-ibridgesync`**. True enables participation; false or a missing key disables it. A fresh installation omits the key and creates no vault settings. Running setup opts into this integration, including eligible restricted content; the project's `sensitivity` is not an upload filter.
 
-Create an excluded project with:
+Setup enables existing projects with no explicit setting and preserves existing true/false choices. Each enrollment is committed through an isolated local clone and its normal hooks. Commit existing source edits first; setup will not mix them into an enrollment commit. An interrupted setup can be retried, and a failed setup does not enable the future-project default.
+
+After successful setup, **every new `new_project.py` project writes `filewise-ibridgesync: true`**, including from another terminal or agent process. Override that default for one project with:
 
 ```sh
 uv run _tools/new_project.py --name offline-notes --description "Local-only notes" --icloud-disabled
 ```
 
-Or change participation later:
+This flag writes `filewise-ibridgesync: false`, even before global setup, so a later setup respects that deliberate opt-out. Change an existing project's choice with:
 
 ```sh
 uv run _tools/icloud_bridge.py disable homelab-inventory
 uv run _tools/icloud_bridge.py enable homelab-inventory
 ```
 
-These helpers set `icloud_disabled: true` or `false` in the project's `.docs.yaml`; commit that project setting when ready. Disabling is not a recursive vault deletion. The next sync removes only unchanged copies owned by the bridge. Pending phone edits block cleanup: re-enable, import or preserve those edits, then disable again.
+The helpers update only that project's setting; commit it when ready. They do not change the default for future projects. Disabling removes only unchanged bridge-owned exported copies on the next sync. Pending phone edits block cleanup: re-enable, import or preserve those edits, then disable again.
+
+### Uninstall or remove the supplied defaults
+
+```sh
+uv run _tools/icloud_bridge.py uninstall
+```
+
+Uninstall stops the owned schedule, disables the integration, removes the private creation-default profile, and deletes only unchanged settings installed by setup. Customized settings, workspace layouts, downloaded plugins, source documents, exported documents, explicit project flags and recovery state are preserved. A vault may therefore retain user-owned `.obsidian/` files. **Projects created after uninstall default to sync disabled again.** Re-running setup restores the opt-in lifecycle and preserves previous bridge configuration.
+
+The existing framework checkout helper can do this in the same operation as removing README.md:
+
+```sh
+python3 _tools/framework_checkout.py --minimal --omit README.md --remove-obsidian --dry-run
+python3 _tools/framework_checkout.py --minimal --omit README.md --remove-obsidian
+```
+
+`--remove-obsidian` uninstalls the configured integration and removes unchanged generated defaults; it does not delete reusable assets from the framework or remove user content. Normal `--minimal`, `--update` and `--omit README.md` operations leave the optional integration alone unless this flag is supplied.
 
 ## Full, lean, and image limits
 
