@@ -151,9 +151,9 @@ def projects(settings, include_disabled=False):
         if (p / ".docs.yaml").is_symlink():
             raise ValueError(f"symlink project config: {p.name}")
         cfg = dl.load_config(p)
-        enabled = cfg.get("filewise-ibridgesync", False)
+        enabled = cfg.get("folderwise-ibridgesync", False)
         if type(enabled) is not bool:
-            raise ValueError(f"{p.name}: filewise-ibridgesync must be boolean")
+            raise ValueError(f"{p.name}: folderwise-ibridgesync must be boolean")
         if enabled or include_disabled:
             if Path(git(p, "rev-parse", "--show-toplevel").strip()).resolve() != p.resolve():
                 raise ValueError(f"{p.name}: expected an independent Git repository")
@@ -696,7 +696,7 @@ def enroll_project(project, home):
             if r.returncode == 0:
                 git(clone, 'config', key, r.stdout.strip())
         target = clone / '.docs.yaml'
-        target.write_text(target.read_text() + '\nfilewise-ibridgesync: true\n')
+        target.write_text(target.read_text() + '\nfolderwise-ibridgesync: true\n')
         dl.load_config(clone)
         git(clone, 'add', '--', '.docs.yaml')
         git(clone, 'commit', '--quiet', '-m', 'Enable project participation in the Obsidian iCloud bridge', '-m',
@@ -717,7 +717,7 @@ def setup_bridge(settings, path, dry=False):
     for project in roots:
         cfg = dl.load_config(project)
         # Missing means not configured yet; an explicit false remains an opt-out.
-        if 'filewise-ibridgesync' not in cfg:
+        if 'folderwise-ibridgesync' not in cfg:
             if git(project, 'status', '--porcelain'):
                 raise ValueError(f'{project.name}: commit local changes before setup enrolls this project')
             git(project, 'ls-files', '--error-unmatch', '.docs.yaml')
@@ -727,11 +727,11 @@ def setup_bridge(settings, path, dry=False):
     if previous and previous.get('bridge_config') != str(path):
         raise ValueError('another bridge configuration owns the local Obsidian setup')
     print(f"Initialize parent vault: {source}; iCloud vault: {settings['vault']}")
-    print('New projects will default to filewise-ibridgesync: true; --icloud-disabled opts out.')
+    print('New projects will default to folderwise-ibridgesync: true; --icloud-disabled opts out.')
     print('Enroll unconfigured projects: ' + (', '.join(p.name for p in enrollment) or 'none'))
     print('Preserve explicit project opt-outs and existing Obsidian settings. Install Tasks/Dataview through Obsidian.')
     if dry:
-        eligible = [p for p in roots if p in enrollment or dl.load_config(p).get('filewise-ibridgesync', False)]
+        eligible = [p for p in roots if p in enrollment or dl.load_config(p).get('folderwise-ibridgesync', False)]
         files, _, omissions = inventory(settings, selected_projects=eligible)
         print(f"Preview export: {len(files)} files / {sum(content_size(data) for data in files.values()):,} bytes; {len(omissions)} omissions")
         for key, data in files.items():
@@ -864,9 +864,9 @@ def main():
                     raise ValueError("provide a project folder name")
                 project = safe(Path(settings["source"]), args.project)
                 pc = dl.load_config(project)
-                pc["filewise-ibridgesync"] = args.command == "enable"
+                pc["folderwise-ibridgesync"] = args.command == "enable"
                 atomic(project / ".docs.yaml", yaml.safe_dump(pc, sort_keys=False).encode())
-                print(f"{args.project}: filewise-ibridgesync={pc['filewise-ibridgesync']}; commit this project setting when ready")
+                print(f"{args.project}: folderwise-ibridgesync={pc['folderwise-ibridgesync']}; commit this project setting when ready")
                 return 0
             if args.command in {"sync", "plan"}:
                 return sync(settings, path.parent, args.command == "plan")

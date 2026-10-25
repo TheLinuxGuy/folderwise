@@ -84,17 +84,17 @@ Handwritten tasks use file/text identity plus duplicate occurrence. Line shifts 
 
 ## Project participation and persistent creation defaults
 
-The positive `.docs.yaml` key is **`filewise-ibridgesync`**. True enables participation; false or a missing key disables it. A fresh installation omits the key and creates no vault settings. Running setup opts into this integration, including eligible restricted content; the project's `sensitivity` is not an upload filter.
+The positive `.docs.yaml` key is **`folderwise-ibridgesync`**. True enables participation; false or a missing key disables it. A fresh installation omits the key and creates no vault settings. Running setup opts into this integration, including eligible restricted content; the project's `sensitivity` is not an upload filter.
 
 Setup enables existing projects with no explicit setting and preserves existing true/false choices. Each enrollment is committed through an isolated local clone and its normal hooks. Commit existing source edits first; setup will not mix them into an enrollment commit. An interrupted setup can be retried, and a failed setup does not enable the future-project default.
 
-After successful setup, **every new `new_project.py` project writes `filewise-ibridgesync: true`**, including from another terminal or agent process. Override that default for one project with:
+After successful setup, **every new `new_project.py` project writes `folderwise-ibridgesync: true`**, including from another terminal or agent process. Override that default for one project with:
 
 ```sh
 uv run _tools/new_project.py --name offline-notes --description "Local-only notes" --icloud-disabled
 ```
 
-This flag writes `filewise-ibridgesync: false`, even before global setup, so a later setup respects that deliberate opt-out. Change an existing project's choice with:
+This flag writes `folderwise-ibridgesync: false`, even before global setup, so a later setup respects that deliberate opt-out. Change an existing project's choice with:
 
 ```sh
 uv run _tools/icloud_bridge.py disable homelab-inventory

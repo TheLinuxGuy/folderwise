@@ -136,7 +136,7 @@ def main() -> int:
     # stamp the README so it gets its byline, index and first Change Log row from the shared tools
     if bridge_enabled or args.icloud_disabled:
         config_path = dest / ".docs.yaml"
-        config_path.write_text(config_path.read_text() + f"\nfilewise-ibridgesync: {str(bridge_enabled).lower()}\n")
+        config_path.write_text(config_path.read_text() + f"\nfolderwise-ibridgesync: {str(bridge_enabled).lower()}\n")
     new_cfg, readme = dl.load_config(dest), dest / "README.md"
     meta, body = dl.split_front_matter(readme.read_text())
     stamped, _, _ = dl.stamp_text(dl.join_front_matter(meta, dx.apply_index(body, dest, new_cfg)),
