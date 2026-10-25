@@ -2,6 +2,7 @@ schema_version: 1
 project: {{PROJECT}}
 description: {{DESCRIPTION_YAML}}
 sensitivity: {{SENSITIVITY}}   # default for new docs: public | private | restricted
+# Optional: folderwise-ibridgesync: true (written by Obsidian setup or new_project.py after setup)
 owner: human
 timezone: {{TIMEZONE}}   # IANA name; all dates/timestamps in this project use it
 review_every_default: 90d

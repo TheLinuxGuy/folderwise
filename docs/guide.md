@@ -419,3 +419,36 @@ Off by default: VS Code's Outline panel (Explorer sidebar, or `Cmd+Shift+O`) alr
 The root `.gitignore` ignores every root entry unless explicitly allowed. The public roots are `_tools/`, `_template/`, `docs/` (framework guides), and the named root files. A new topic folder is ignored automatically, including its independent Git repository. Do not place personal knowledge inside an allowed framework root.
 
 `_tools/framework_guard.py` validates the entire staged framework index. The framework pre-commit and pre-push hooks run it when `core.hooksPath` is configured as shown above. Git ignore rules and local hooks prevent routine mistakes; they can be bypassed deliberately and are not an access-control boundary. Never store credentials in knowledge documents.
+
+
+## Optional Obsidian and iCloud bridge
+
+A fresh Folderwise installation creates no Obsidian vault and leaves bridge sync off. Run `icloud_bridge.py setup` to initialize a local parent vault and a separate iCloud vault with reviewed defaults, enroll existing unconfigured projects, set the default for future `new_project.py` projects, perform the first sync and enable the Mac schedule. The default interval is five minutes. See [the full setup, defaults, uninstall and recovery guide](obsidian.md).
+
+```sh
+uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Folderwise" --dry-run
+uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Folderwise"
+uv run _tools/icloud_bridge.py configure --mode lean --interval-minutes 5
+uv run _tools/icloud_bridge.py plan
+uv run _tools/icloud_bridge.py sync
+uv run _tools/icloud_bridge.py status
+uv run _tools/icloud_bridge.py doctor
+uv run _tools/icloud_bridge.py logs
+uv run _tools/icloud_bridge.py notify-test
+uv run _tools/icloud_bridge.py vault-init
+uv run _tools/icloud_bridge.py schedule-disable
+uv run _tools/new_project.py --name offline-notes --description "Local-only notes" --icloud-disabled
+```
+
+The `.docs.yaml` setting `folderwise-ibridgesync` is a positive boolean: true enables participation; false or a missing key disables it. Before setup, new projects omit the key and remain disabled. After setup, a persistent private root profile makes new projects write `folderwise-ibridgesync: true`, including when created by another process; `--icloud-disabled` writes false. Setup enrolls existing projects with no setting, preserving explicit false opt-outs and true opt-ins. It commits each enrollment in an isolated clone after hooks pass. Existing project source changes must be committed before enrollment. The enable/disable helpers change a single project's setting without changing the default for future projects.
+
+Reviewed JSON/CSS defaults ship under `_tools/obsidian_defaults/`. Setup writes missing files into both root `.obsidian/` directories, preserving existing settings. It includes core navigation, appearance, graph, property types, a small CSS snippet, plugin IDs and compatible Tasks/Dataview settings. Install community-plugin code through Obsidian; workspace layouts, plugin binaries, private data and live `.obsidian/` directories are not published. `vault-init` can fill missing defaults again. Use `--no-schedule` with setup for a foreground-only or non-Mac installation.
+
+Uninstall resets the future-project default, disables the scheduled bridge, and removes only unchanged setup-owned setting files. Customized settings, plugin code, project documents, explicit project flags and recovery state remain intact. The checkout helper supports removal together with optional framework files:
+
+```sh
+uv run _tools/icloud_bridge.py uninstall
+python3 _tools/framework_checkout.py --minimal --omit README.md --remove-obsidian
+```
+
+Bridge-local JSON configuration is separate from `.docs.yaml`: `version` is 1; `enabled` records installed integration state; `source` and `vault` are separate absolute directories; `mode` is full/lean; `interval_minutes` defaults to 5; `notifications` is errors/off; `max_image_bytes` and `max_images_total_bytes` are null for unlimited (zero means zero bytes). `adapters` maps project names to local argv arrays implementing list/apply/validate. `launchagents_dir` is an optional override for isolated scheduling tests. Configure limits with `--max-image-bytes` and `--max-images-total-bytes`, clear both with `--unlimited-images`, and inspect omissions/estimated export size in root-vault `Bridge Status.md`. These are file-size estimates, not actual iCloud account usage or billing.

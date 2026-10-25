@@ -72,6 +72,7 @@ def main() -> int:
     ap.add_argument("--sensitivity", choices=dl.SENSITIVITIES)
     ap.add_argument("--timezone", default=dl.DEFAULT_TZ, help="IANA timezone for all timestamps in this project")
     ap.add_argument("--by", default="human", help="'human' or '<agent>/<model>' recorded as the creator")
+    ap.add_argument("--icloud-disabled", action="store_true", help="exclude this project from the optional iCloud bridge")
     ap.add_argument("--no-commit", action="store_true")
     ap.add_argument("--no-prompt", action="store_true", help="do not print the agent setup prompt")
     ap.add_argument("--start", choices=["claude", "codex"], help="after creating, start this agent in the project with the setup prompt pre-filled (interactive terminal only)")
@@ -112,6 +113,17 @@ def main() -> int:
         "DATE": moment.date().isoformat(), "TIMESTAMP": dl.format_ts(moment),
         "TIMEZONE": args.timezone, "BY": args.by,
     }
+    profile_path = BASE / ".folderwise-obsidian.json"
+    try:
+        if profile_path.is_symlink():
+            raise ValueError("Obsidian profile must not be a symlink")
+        profile = json.loads(profile_path.read_text()) if profile_path.exists() else {}
+        if not isinstance(profile, dict) or type(profile.get('enabled', False)) is not bool:
+            raise ValueError("invalid Obsidian profile")
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    bridge_enabled = profile.get("enabled", False) is True and not args.icloud_disabled
     for src in sorted(TEMPLATE.rglob("*")):
         rel = src.relative_to(TEMPLATE)
         out = dest / rel
@@ -122,6 +134,9 @@ def main() -> int:
             out.write_text(src.read_text() if rel.name in SKIP else render(src.read_text(), values))
 
     # stamp the README so it gets its byline, index and first Change Log row from the shared tools
+    if bridge_enabled or args.icloud_disabled:
+        config_path = dest / ".docs.yaml"
+        config_path.write_text(config_path.read_text() + f"\nfolderwise-ibridgesync: {str(bridge_enabled).lower()}\n")
     new_cfg, readme = dl.load_config(dest), dest / "README.md"
     meta, body = dl.split_front_matter(readme.read_text())
     stamped, _, _ = dl.stamp_text(dl.join_front_matter(meta, dx.apply_index(body, dest, new_cfg)),

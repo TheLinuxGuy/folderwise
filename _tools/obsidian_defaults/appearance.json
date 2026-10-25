@@ -1,0 +1,7 @@
+{
+  "theme": "obsidian",
+  "baseFontSize": 17,
+  "enabledCssSnippets": [
+    "folderwise"
+  ]
+}

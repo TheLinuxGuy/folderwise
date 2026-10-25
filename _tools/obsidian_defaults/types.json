@@ -1,0 +1,11 @@
+{
+  "types": {
+    "aliases": "aliases",
+    "cssclasses": "multitext",
+    "tags": "tags",
+    "doc_type": "text",
+    "status": "text",
+    "updated": "date",
+    "last_verified": "date"
+  }
+}

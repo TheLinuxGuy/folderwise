@@ -53,7 +53,7 @@ def s_docs_coverage():
         check(f"root AGENTS.md lists {f.name}", f.name in agents)
     keys = {"schema_version", "project", "description"}
     for f in SRC_TOOLS.glob("*.py"):
-        keys |= set(re.findall(r'\bcfg(?:\.get\(|\[)"([a-z_]+)"', f.read_text()))
+        keys |= set(re.findall(r'\bcfg(?:\.get\(|\[)"([a-z_][a-z_-]*)"', f.read_text()))
     for k in sorted(keys):
         check(f"public documentation covers the .docs.yaml setting '{k}'", f"`{k}`" in readme)
 
