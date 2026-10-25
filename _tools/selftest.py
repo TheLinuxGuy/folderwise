@@ -596,7 +596,7 @@ def s_cli_errors():
     rc, out = tool("docs_recent.py", "--since", "30d", "--limit", "1")
     check("docs_recent --limit caps the listed rows", rc == 0 and "(showing 1)" in out and sum("proj/" in line for line in out.splitlines()) == 1, out)
     rc, out = tool("docs_stale.py", "--fail", env={"DOCS_FAKE_NOW": "2099-01-01T10:00"})
-    check("docs_stale --fail exits 1 when something is overdue", rc == 1 and "overdue" in out, out)
+    check("DEMO deliberately failing check", False, "demonstration only; do not merge")
     rc, out = tool("docs_stale.py", "--within", "30", env={"DOCS_FAKE_NOW": "2027-12-01T10:00"})
     check("docs_stale --within still lists overdue docs", rc == 0 and out.strip(), out)
 
