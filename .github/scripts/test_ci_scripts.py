@@ -78,6 +78,32 @@ def build_args(repo, commit, out, report, version="1.2.3"):
     return argparse.Namespace(repo=repo, commit=commit, version=version, manifest=rb.MANIFEST, out=out, report=report)
 
 
+class PublicDocsTests(unittest.TestCase):
+    def test_missing_public_guide_fails_instead_of_skipping_checks(self):
+        module = load("test_public_docs")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("[Guide](docs/guide.md)\n")
+            module.SRC_TOOLS = root / "_tools"
+            with self.assertRaises(FileNotFoundError):
+                module.public_documentation()
+            (root / "docs").mkdir()
+            (root / "docs/guide.md").write_text("# Fictional guide\n")
+            self.assertEqual(len(module.public_documentation()), 2)
+            (root / "README.md").unlink()
+            with self.assertRaises(FileNotFoundError):
+                module.public_documentation()
+
+    def test_guide_must_be_linked_from_landing_page(self):
+        module = load("test_public_docs")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("# No guide link\n")
+            module.SRC_TOOLS = root / "_tools"
+            with self.assertRaises(ValueError):
+                module.public_documentation()
+
+
 class VersionTests(unittest.TestCase):
     def test_valid_and_invalid(self):
         for v, pre in [("0.1.0", False), ("1.2.3", False), ("10.20.30", False), ("1.2.3-rc.1", True), ("1.0.0-alpha", True), ("1.0.0-0.3.7", True)]:

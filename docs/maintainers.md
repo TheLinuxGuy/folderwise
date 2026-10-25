@@ -110,3 +110,7 @@ Public repository, standard GitHub-hosted runners (Linux and macOS), no larger o
 ## Updating pinned versions
 
 Actions are pinned to full commit SHAs with the version in a comment; Dependabot proposes updates weekly. Pinned tools: uv (`UV_VERSION` in both workflows), ruff, zizmor, actionlint (checksum-verified download) and coverage.py (`ci_coverage.py` script metadata). When Python releases a new stable version, add it to the matrix next to `3.15` (the workflow files list it explicitly so a missing interpreter fails loudly instead of silently testing something else).
+
+## Minimal installation validation
+
+CI runs `uv run .github/scripts/test_public_docs.py` against the full source checkout; the installed `uv run _tools/selftest.py` needs no public guides or root README. The clean-install jobs also create a minimal clone with `python3 _tools/framework_checkout.py --minimal` and run its self-test on Linux and macOS. Self-test fixtures exercise direct pulls, the update command, future folder inclusion/exclusion, local-file refusal, restoration, and preservation of an independent repository. Full release archives continue to include the public guides.
