@@ -109,3 +109,5 @@ Public repository, standard GitHub-hosted runners (Linux and macOS), no larger o
 ## Updating pinned versions
 
 Actions are pinned to full commit SHAs with the version in a comment; Dependabot proposes updates weekly. Pinned tools: uv (`UV_VERSION` in both workflows), ruff, zizmor, actionlint (checksum-verified download) and coverage.py (`ci_coverage.py` script metadata). When Python releases a new stable version, add it to the matrix next to `3.15` (the workflow files list it explicitly so a missing interpreter fails loudly instead of silently testing something else).
+
+<!-- demo: documentation-only change -->
