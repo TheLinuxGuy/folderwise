@@ -833,7 +833,7 @@ def s_readme_commands():
     check("public documentation shows the exact setup prompt (no drift)", expected in readme, expected[:80])
     check("public documentation retains the full command reference", n_cmds >= 10, f"{n_cmds} commands")
     check("landing README has a getting-started section and shell example",
-          bool(re.search(r'^## (Getting started|Quick start)\s*$', landing, re.M))
+          bool(re.search(r'^## (?:[^\w\s]+\s+)?(Getting started|Quick start)\s*$', landing, re.M))
           and bool(re.search(r'```(?:bash|sh|zsh)\n', landing)))
     sys.path.insert(0, str(SRC_TOOLS))
     import docslib as dl  # noqa: E402
