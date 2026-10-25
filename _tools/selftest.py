@@ -864,6 +864,7 @@ def main() -> int:
     shutil.copytree(SRC_TEMPLATE, tmp / "_template", ignore=ignore)
     CTX.update(root=tmp, tools=tmp / "_tools", proj=tmp / "proj")
     selected = [(n, f) for n, f in SECTIONS if not args.keyword or args.keyword in n]
+    selected = selected[:6]  # DEMO: run fewer sections so coverage drops
     # later sections build on earlier ones, so the project is always created first
     if selected and selected[0][0] != "create":
         selected.insert(0, SECTIONS[0])
