@@ -374,11 +374,11 @@ _Maintainer: replace this line before publishing (supported Python, uv, operatin
 
 ### Upgrade notes
 
-_Maintainer: replace this line before publishing. Clone installs: `git pull --ff-only`. Archive installs: follow "Upgrading an archive install" in the README; independent knowledge projects are never modified._
+_Maintainer: replace this line before publishing. Clone installs: `git pull --ff-only`. Archive installs: follow "Upgrading an archive install" in docs/framework-checkout.md; independent knowledge projects are never modified._
 
 ### Install
 
-Download `folderwise-{v}.zip` or `folderwise-{v}.tar.gz` together with `SHA256SUMS`, verify, extract, and run the self-test as described in the README ("Install from a release archive"). Cloning the repository is recommended if you want Git-based upgrades.
+Download `folderwise-{v}.zip` or `folderwise-{v}.tar.gz` together with `SHA256SUMS`, verify, extract, and run the self-test as described in docs/framework-checkout.md ("Install from a release archive"). Cloning the repository is recommended if you want Git-based upgrades.
 
 ```bash
 shasum -a 256 -c SHA256SUMS --ignore-missing

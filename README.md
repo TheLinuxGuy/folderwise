@@ -2,29 +2,44 @@
 
 <h1><img src="docs/assets/folderwise-hero.png" alt="Folderwise — Human-readable knowledge. AI-assisted upkeep. Markdown and Git underneath. Wherever you need it." width="900"></h1>
 
-[![Python 3.10 or later](docs/assets/badge-python.svg)](#getting-started)
+[![Python 3.10 or later](docs/assets/badge-python.svg)](#-getting-started)
 [![Plain Markdown files](docs/assets/badge-format.svg)](docs/guide.md)
 [![MIT licensed](docs/assets/badge-license.svg)](LICENSE)
+[![CI](https://github.com/TheLinuxGuy/folderwise/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/TheLinuxGuy/folderwise/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/TheLinuxGuy/folderwise/graph/badge.svg)](https://codecov.io/gh/TheLinuxGuy/folderwise)
+[![Latest release](https://img.shields.io/github/v/release/TheLinuxGuy/folderwise?display_name=tag&sort=semver)](https://github.com/TheLinuxGuy/folderwise/releases/latest)
 
-[Overview](#a-place-for-what-you-know) · [Get started](#getting-started) · [See it in Obsidian](#see-it-in-obsidian) · [Documentation](docs/guide.md)
+[Overview](#-a-place-for-what-you-know) · [What's new](#-whats-new) · [Get started](#-getting-started) · [See it in Obsidian](#-see-it-in-obsidian) · [Documentation](docs/guide.md)
 
 </div>
 
-## A place for what you know
+## 📚 A place for what you know
 
 You solved it once. Keep the instructions, the evidence, and the decisions somewhere you can find them again.
 
 **Folderwise** is a Markdown-and-Git framework for knowledge that humans read and AI agents help maintain. Create dedicated projects for your home network, household records, technical runbooks, or anything you expect to revisit.
 
-| Organize | Maintain | Revisit |
+| 🗂️ Organize | 🛠️ Maintain | 🔎 Revisit |
 |---|---|---|
 | One topic, one folder, one Git history. | Shared rules, change stamps, and checks. | Generated indexes, review dates, and optional Obsidian views. |
 
-## Getting started
+## 🆕 What's new
 
-**Requires:** Git with a configured author identity, Python 3.10+, and [uv](https://docs.astral.sh/uv/getting-started/installation/).
+**[Folderwise 0.1.0](https://github.com/TheLinuxGuy/folderwise/releases/tag/v0.1.0): the first release.**
 
-**Platforms:** macOS and Linux (CI tests Python 3.10 and 3.15 on Linux and 3.15 on macOS). Native Windows is not supported or tested: the Git hooks are POSIX `sh` scripts, so use WSL.
+- 📦 **Downloadable releases.** Zip and tar.gz archives with `SHA256SUMS`, built from one recorded commit and extracted and tested on Linux and macOS before they are offered. Cloning is still recommended; archives have no Git history.
+- ✅ **Tested on every change.** A 400+ check self-test runs on Linux (Python 3.10 and 3.15) and macOS (Python 3.15), with a clean-machine install check and 85% production line coverage required.
+- 🛡️ **Guarded framework repository.** Only approved framework files can enter it; your knowledge projects, caches and credentials cannot.
+- 🔁 **Safe archive upgrades.** Step-by-step, no overwrite, no reset, and your projects are never touched: [upgrading an archive install](docs/framework-checkout.md#upgrading-an-archive-install).
+- 🪟 **Platforms.** Linux and macOS. Native Windows is not supported; use WSL.
+
+See the [release notes](https://github.com/TheLinuxGuy/folderwise/releases/tag/v0.1.0) for the full list of changes.
+
+## 🚀 Getting started
+
+**Requires:** 🧑‍💻 Git with a configured author identity, 🐍 Python 3.10+, and ⚡ [uv](https://docs.astral.sh/uv/getting-started/installation/).
+
+**Platforms:** 🍎 macOS and 🐧 Linux (CI tests Python 3.10 and 3.15 on Linux and 3.15 on macOS). Native Windows is not supported or tested: the Git hooks are POSIX `sh` scripts, so use WSL.
 
 ```sh
 git clone https://github.com/TheLinuxGuy/folderwise.git ~/folderwise
@@ -36,20 +51,41 @@ uv run _tools/new_project.py
 Choose a topic, describe its purpose, and set its sensitivity. Folderwise creates its Git repository, starter files, and an agent setup prompt. Give that prompt to Codex or Claude Code to shape the project, or edit the files yourself.
 
 
-Cloning is recommended because `git pull --ff-only` upgrades it. A [release archive](docs/framework-checkout.md#install-from-a-release-archive) (`.zip` or `.tar.gz` with `SHA256SUMS`, no Git history) is also available from [GitHub Releases](https://github.com/TheLinuxGuy/folderwise/releases); its [upgrade steps](docs/framework-checkout.md#upgrading-an-archive-install) never touch your projects.
+| | 🌱 Clone (recommended) | 📦 Release archive |
+|---|---|---|
+| Get it | `git clone` as above | download from [GitHub Releases](https://github.com/TheLinuxGuy/folderwise/releases) and verify `SHA256SUMS` |
+| History | full | none |
+| Upgrade | `git pull --ff-only` | [copy framework files with backups](docs/framework-checkout.md#upgrading-an-archive-install) |
+| Instructions | this page | [install from a release archive](docs/framework-checkout.md#install-from-a-release-archive) |
+
+Upgrades never touch your independent knowledge projects.
 
 > [!TIP]
 > You don't need to organize your whole life first. Pick one useful question—“How do I recover this service?”—and document the answer.
 
-## From notes to a maintained knowledge folder
+## 🔁 From notes to a maintained knowledge folder
 
-1. **Describe the topic.** Give an agent your context and choose a folder structure.
-2. **Document what matters.** Use reference notes, inventories, runbooks, decisions, plans, and logs.
-3. **Keep it useful.** Record changes, review the diff, and check which notes are due for verification.
+1. 🗣️ **Describe the topic.** Give an agent your context and choose a folder structure.
+2. 📝 **Document what matters.** Use reference notes, inventories, runbooks, decisions, plans, and logs.
+3. 🧹 **Keep it useful.** Record changes, review the diff, and check which notes are due for verification.
 
 Folderwise includes metadata and link validation, CSV-to-Markdown tables, generated indexes, and a staged-document hook. The [full guide](docs/guide.md) covers the tools and their conventions.
 
-## See it in Obsidian
+## 🧰 What's included
+
+| Tool | What it does |
+|---|---|
+| ✨ `new_project.py` | creates a project: own Git repo, shared rules, hook, first commit, agent setup prompt |
+| 📝 `docs_new.py` / `docs_stamp.py` | start a doc from a skeleton; stamp every edit with an author and a Change Log entry |
+| ✅ `docs_lint.py` | validates front matter, Change Logs, tables and links (also run by the pre-commit hook) |
+| 🔎 `docs_index.py` / `docs_recent.py` / `docs_stale.py` | what exists, what changed lately, what is due for re-verification |
+| 🔀 `docs_mv.py` | moves or renames docs and headings and keeps every link valid |
+| 📊 `render_tables.py` | renders CSV files into Markdown tables |
+| 🩺 `docs_doctor.py` / `sync_rules.py` | health-check projects; push the template's shared rules into them |
+
+Every tool, flag and setting is documented in the [full guide](docs/guide.md).
+
+## 🔮 See it in Obsidian
 
 <p align="center">
   <img src="docs/assets/obsidian-local-graph.png" alt="Fictional Docker host documentation beside its related notes in Obsidian's local graph" width="800">
@@ -63,7 +99,7 @@ Obsidian adds search, backlinks, and visual navigation over your files. For Mac 
 > [!NOTE]
 > Your topic folders are separate repositories, ignored by the framework's Git checkout. Folderwise does not upload them automatically or provide its own sync service. [Understand the layout](docs/framework-checkout.md).
 
-## Keep it current
+## 🔄 Keep it current
 
 ```sh
 cd ~/folderwise
@@ -72,3 +108,14 @@ uv run _tools/docs_recent.py --all --since 7d
 ```
 
 Check project health and recent updates, then review any notes whose verification is due with `docs_stale.py`. A recorded verification date reflects a check someone performed; it does not prove the contents are correct.
+
+## 🔒 Privacy and safety
+
+- 🏠 Your knowledge stays local, in your own Git repositories. Folderwise does not upload it or provide a sync service.
+- 🚧 The framework repository is an allowlist, and a guard rejects knowledge projects, secrets, caches, symlinks and nested repositories before they can be committed.
+- ⚠️ The guard checks paths, not meaning: review diffs before publishing, and never put passwords or tokens in documents.
+- 🤖 The shipped agent permission defaults are defaults, not a security boundary. Review them before using an agent.
+
+## 🤝 Contributing
+
+Contributions are welcome. Run `uv run _tools/selftest.py` before and after changes and keep examples fictional. CI requires the full self-test, 85% overall production line coverage and 90% coverage of changed lines. See [CONTRIBUTING.md](CONTRIBUTING.md); maintainers: [release and CI guide](docs/maintainers.md).
