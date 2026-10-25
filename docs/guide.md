@@ -419,3 +419,26 @@ Off by default: VS Code's Outline panel (Explorer sidebar, or `Cmd+Shift+O`) alr
 The root `.gitignore` ignores every root entry unless explicitly allowed. The public roots are `_tools/`, `_template/`, `docs/` (framework guides), and the named root files. A new topic folder is ignored automatically, including its independent Git repository. Do not place personal knowledge inside an allowed framework root.
 
 `_tools/framework_guard.py` validates the entire staged framework index. The framework pre-commit and pre-push hooks run it when `core.hooksPath` is configured as shown above. Git ignore rules and local hooks prevent routine mistakes; they can be bypassed deliberately and are not an access-control boundary. Never store credentials in knowledge documents.
+
+
+## Optional iCloud bridge
+
+`icloud_bridge.py` keeps Mac repositories authoritative and exports a separate iCloud/Obsidian vault. Its central task dashboard supports completion/reopening, authoritative-source adapters, regeneration, stamping, validation and automatic local commits. Full export and unlimited image storage are the defaults; lean mode and limits are optional. macOS scheduling defaults to five minutes, with optional issue notifications and an initial enable announcement. See [the full Obsidian/iPhone setup and recovery guide](obsidian.md).
+
+```sh
+uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Folderwise"
+uv run _tools/icloud_bridge.py plan
+uv run _tools/icloud_bridge.py sync
+uv run _tools/icloud_bridge.py configure --mode lean --interval-minutes 5
+uv run _tools/icloud_bridge.py schedule-enable
+uv run _tools/icloud_bridge.py status
+uv run _tools/icloud_bridge.py doctor
+uv run _tools/icloud_bridge.py logs
+uv run _tools/icloud_bridge.py notify-test
+uv run _tools/icloud_bridge.py schedule-disable
+uv run _tools/new_project.py --name offline-notes --description "Local-only notes" --icloud-disabled
+```
+
+All projects participate unless the `.docs.yaml` setting `icloud_disabled` is true; missing/false means enabled, including restricted projects. `--icloud-disabled` records that opt-out when creating a project. The `enable PROJECT` and `disable PROJECT` bridge helpers update this setting later. Global bridge setup/scheduling remains an explicit user action. Capture inboxes and general phone document editing are outside this feature.
+
+Bridge-local JSON configuration is separate from `.docs.yaml`: `version` is 1; `source` and `vault` are separate absolute directories; `mode` is full/lean; `interval_minutes` defaults to 5; `notifications` is errors/off; `max_image_bytes` and `max_images_total_bytes` are null for unlimited (zero means zero bytes). `adapters` maps project names to local argv arrays implementing list/apply/validate. `launchagents_dir` is an optional override for isolated scheduling tests. Configure limits with `--max-image-bytes` and `--max-images-total-bytes`, clear both with `--unlimited-images`, and inspect omissions/estimated export size in root-vault `Bridge Status.md`. These are file-size estimates, not actual iCloud account usage or billing.

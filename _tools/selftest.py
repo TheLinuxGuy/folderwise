@@ -944,11 +944,278 @@ def s_framework_checkout():
     shutil.rmtree(base)
 
 
+def s_ibridge():
+    """Drive a fictional two-project vault through the real CLI, adapters and hooks."""
+    root = CTX['root'] / 'bridge-sandbox'
+    source, vault, home = root / 'source', root / 'vault', root / 'state'
+    source.mkdir(parents=True)
+    for name in ('_tools', '_template'):
+        shutil.copytree(CTX['root'] / name, source / name, ignore=shutil.ignore_patterns('__pycache__'))
+    conf = home / 'config.json'
+
+    def invoke(*args, env=None):
+        return tool('icloud_bridge.py', '--config', conf, *args, env=env)
+
+    def local(name, *args, cwd=None):
+        return sh(['uv', 'run', '--quiet', str(source / '_tools' / name), *map(str, args)], cwd=cwd or source)
+
+    for name, extra in [('alpha', []), ('beta', []), ('disabled', ['--icloud-disabled'])]:
+        rc, out = local('new_project.py', '--name', name, '--description', 'Fictional bridge test', '--no-prompt', *extra)
+        check('bridge creates ' + name, rc == 0, out)
+    alpha = source / 'alpha'
+    rc,out=local('docs_doctor.py',cwd=alpha)
+    check('project doctor recognizes icloud_disabled as a framework setting',rc==0 and 'unknown key' not in out,out)
+    rc, out = local('docs_new.py', 'docs/checklist.md', '--type', 'plan', '--title', 'Checklist', '--by', 'human', cwd=alpha)
+    note = alpha / 'docs/checklist.md'
+    note.write_text(note.read_text().replace('## Change Log', '- [ ] First task\n  - [ ] Nested task\n- [x] Completed task\n- [ ] Duplicate\n- [ ] Duplicate\n\n```md\n- [ ] Example only\n```\n\n## Change Log'))
+    local('docs_stamp.py', 'docs/checklist.md', '--by', 'human', '--summary', 'Add tasks', cwd=alpha)
+    sh(['git', 'add', '-A'], cwd=alpha)
+    sh(['git', 'commit', '-qm', 'Add test tasks'], cwd=alpha)
+    rc, out = invoke('setup', '--source', source, '--vault', vault, '--notifications', 'off')
+    check('bridge setup defaults full/unlimited/five minutes', rc == 0 and json.loads(conf.read_text())['mode'] == 'full'
+          and json.loads(conf.read_text())['max_image_bytes'] is None and json.loads(conf.read_text())['interval_minutes'] == 5, out)
+    rc, out = invoke('setup', '--source', source, '--vault', vault)
+    check('bridge refuses accidental re-setup', rc == 1 and 'exists' in out, out)
+    rc, out = invoke('plan')
+    check('bridge plan exports both enabled projects without writing vault', rc == 0 and 'alpha/docs/checklist.md' in out
+          and 'beta/README.md' in out and 'disabled/' not in out and not vault.exists(), out)
+    rc, out = invoke('sync')
+    view = vault / '_Folderwise Tasks/alpha.md'
+    check('bridge exports dashboard and completed tasks', rc == 0 and '## Completed tasks' in (vault / 'Tasks.md').read_text()
+          and '- [x] Completed task' in view.read_text() and 'Example only' not in view.read_text(), out)
+    check('bridge excludes Git and instructions', not (vault / 'alpha/.git').exists() and not (vault / 'alpha/AGENTS.md').exists())
+    view.write_text(view.read_text().replace('- [ ] First task', '- [x] First task'))
+    rc, out = invoke('sync')
+    _, log = sh(['git', 'log', '-1', '--format=%B'], cwd=alpha)
+    check('phone dashboard toggle stamps and commits authoritative Markdown', rc == 0 and '- [x] First task' in note.read_text()
+          and 'updated_by: human' in note.read_text() and 'Bridge: folderwise-ibridge' in log, out)
+    head = sh(['git', 'rev-parse', 'HEAD'], cwd=alpha)[1]
+    rc, out = invoke('sync')
+    check('unchanged sync is idempotent', rc == 0 and sh(['git', 'rev-parse', 'HEAD'], cwd=alpha)[1] == head, out)
+    view.write_text(view.read_text().replace('- [x] First task', '- [ ] First task'))
+    rc, out = invoke('sync')
+    check('completed dashboard task can reopen', rc == 0 and '- [ ] First task' in note.read_text(), out)
+    mirror = vault / 'alpha/docs/checklist.md'
+    mirror.write_text(mirror.read_text().replace('- [ ] Nested task', '- [x] Nested task'))
+    rc, out = invoke('sync')
+    check('checkbox edits inside mirrored source notes also import', rc == 0 and '- [x] Nested task' in note.read_text(), out)
+    # Dirty source/index and failed hooks must leave both source and phone pending.
+    view.write_text(view.read_text().replace('- [ ] First task', '- [x] First task'))
+    (alpha / 'scratch.txt').write_text('uncommitted\n')
+    rc, out = invoke('sync')
+    check('dirty project blocks import and preserves pending phone toggle', rc == 1 and 'uncommitted' in out
+          and '- [ ] First task' in note.read_text() and '- [x] First task' in view.read_text(), out)
+    (alpha / 'scratch.txt').unlink()
+    hook = alpha / '.git/hooks/pre-commit'
+    original_hook = hook.read_text()
+    hook.write_text('#!/bin/sh\necho intentional hook rejection >&2\nexit 1\n')
+    rc, out = invoke('sync')
+    check('hook rejection cannot partially change Mac records', rc == 1 and 'intentional hook rejection' in out
+          and '- [ ] First task' in note.read_text(), out)
+    hook.write_text(original_hook)
+    rc, out = invoke('sync')
+    check('retry after hook repair imports pending change', rc == 0 and '- [x] First task' in note.read_text(), out)
+    view.write_text(view.read_text().replace('First task', 'Phone prose edit'))
+    rc, out = invoke('sync')
+    check('unsupported phone edits are preserved and reported', rc == 1 and 'Phone prose edit' in view.read_text()
+          and 'only checkbox' in (vault / 'Bridge Status.md').read_text(), out)
+    view.write_text(view.read_text().replace('Phone prose edit', 'First task'))
+    invoke('sync')
+    # Adapter lives in project, uses a CSV, and hides completed rows in normal Markdown.
+    (alpha / 'data/tasks.csv').write_text('id,title,done\nitem-1,CSV action,false\n')
+    script = alpha / 'scripts/adapter.py'
+    script.parent.mkdir(exist_ok=True)
+    script.write_text('''import csv,json,sys
+from pathlib import Path
+p=Path('data/tasks.csv')
+rows=list(csv.DictReader(p.open()))
+op=sys.argv[1]
+if op=='list':
+ print(json.dumps([dict(id=r['id'],title=r['title'],checked=r['done']=='true',path='docs/checklist.md') for r in rows]))
+elif op=='apply':
+ changes={c['id']:c['checked'] for c in json.load(sys.stdin)}
+ for r in rows:
+  if r['id'] in changes: r['done']='true' if changes[r['id']] else 'false'
+ with p.open('w',newline='') as f:
+  w=csv.DictWriter(f,fieldnames=['id','title','done']);w.writeheader();w.writerows(rows)
+ note=Path('docs/checklist.md');text=note.read_text();start=text.index('<!-- tasks:start -->');end=text.index('<!-- tasks:end -->')
+ block='<!-- tasks:start -->\\n'+''.join('- [ ] '+r['title']+'\\n' for r in rows if r['done']=='false')
+ note.write_text(text[:start]+block+text[end:])
+elif op=='validate':
+ assert all(r['done'] in ('true','false') for r in rows)
+''')
+    note.write_text(note.read_text().replace('## Change Log', '<!-- tasks:start -->\n- [ ] CSV action\n<!-- tasks:end -->\n\n## Change Log'))
+    local('docs_stamp.py', 'docs/checklist.md', '--by', 'human', '--summary', 'Add generated tasks', cwd=alpha)
+    sh(['git', 'add', '-A'], cwd=alpha)
+    rc, out = sh(['git', 'commit', '-qm', 'Add CSV adapter'], cwd=alpha)
+    check('fictional CSV source committed with real hook', rc == 0, out)
+    cfg = json.loads(conf.read_text());cfg['adapters']={'alpha':[sys.executable,'scripts/adapter.py']};conf.write_text(json.dumps(cfg))
+    invoke('sync')
+    check('generated checkbox appears once in dashboard projection', view.read_text().count('CSV action') == 1)
+    view.write_text(view.read_text().replace('- [ ] CSV action', '- [x] CSV action'))
+    rc, out = invoke('sync')
+    check('CSV task toggle updates authoritative row and regenerates Markdown', rc == 0 and 'item-1,CSV action,true' in (alpha / 'data/tasks.csv').read_text()
+          and '- [ ] CSV action' not in note.read_text() and '- [x] CSV action' in view.read_text(), out)
+    view.write_text(view.read_text().replace('- [x] CSV action', '- [ ] CSV action'))
+    rc, out = invoke('sync')
+    check('completed CSV row can reopen after disappearing from source view', rc == 0 and 'item-1,CSV action,false' in (alpha / 'data/tasks.csv').read_text()
+          and '- [ ] CSV action' in note.read_text(), out)
+    # Full/lean mode, image caps and reporting.
+    images = alpha / 'docs/assets';images.mkdir()
+    for name, size in [('a.png',3),('b.png',8),('c.png',2),('unused.png',1)]:
+        (images / name).write_bytes(b'x'*size)
+    (alpha / 'large.pdf').write_bytes(b'pdf'*100)
+    note.write_text(note.read_text().replace('## Change Log', '![A](assets/a.png)\n![B](assets/b.png)\n![C](assets/c.png)\n\n## Change Log'))
+    local('docs_stamp.py', 'docs/checklist.md', '--by', 'human', '--summary', 'Add images', cwd=alpha)
+    sh(['git', 'add', '-A'], cwd=alpha);sh(['git','commit','-qm','Add attachments'],cwd=alpha)
+    rc,out=invoke('sync')
+    check('full mode exports other tracked content',rc==0 and (vault/'alpha/large.pdf').exists(),out)
+    invoke('configure','--mode','lean','--max-image-bytes','5','--max-images-total-bytes','4')
+    rc,out=invoke('sync')
+    status=(vault/'Bridge Status.md').read_text()
+    check('lean mode honors both limits and cleans unchanged owned copies',rc==0 and (vault/'alpha/docs/assets/a.png').exists()
+          and not (vault/'alpha/large.pdf').exists() and not (vault/'alpha/docs/assets/unused.png').exists()
+          and 'exceeds per-image limit' in status and 'exceeds aggregate image limit' in status,out)
+    stamp=(vault/'Bridge Status.md').stat().st_mtime_ns
+    invoke('sync')
+    check('unchanged report does not churn every scheduled run',(vault/'Bridge Status.md').stat().st_mtime_ns==stamp)
+    invoke('configure','--unlimited-images')
+    rc,out=invoke('sync')
+    check('unlimited image setting restores all referenced images',rc==0 and (vault/'alpha/docs/assets/b.png').exists()
+          and (vault/'alpha/docs/assets/c.png').exists(),out)
+    (vault/'alpha/docs/assets/b.png').write_bytes(b'phone image edit')
+    invoke('configure','--max-image-bytes','1')
+    rc,out=invoke('sync')
+    check('shrinking cap preserves changed mobile image',rc==1 and (vault/'alpha/docs/assets/b.png').read_bytes()==b'phone image edit',out)
+    (vault/'alpha/docs/assets/b.png').write_bytes((images/'b.png').read_bytes())
+    invoke('configure','--unlimited-images');invoke('sync')
+    rc,out=invoke('disable','beta');invoke('sync')
+    check('disable helper excludes a project and removes its unchanged files',rc==0 and not (vault/'beta/README.md').exists(),out)
+    rc,out=invoke('enable','beta');invoke('sync')
+    check('enable helper restores project inclusion',rc==0 and (vault/'beta/README.md').exists(),out)
+    for command in ['status','doctor','logs']:
+        rc,out=invoke(command);check('bridge '+command+' diagnostics',rc==0,out)
+    rc,out=invoke('configure','--interval-minutes','0')
+    check('bridge rejects zero interval without corrupting config',rc==1 and json.loads(conf.read_text())['interval_minutes']==5,out)
+    # Directory escape via an image reference fails before an external file can upload.
+    original=note.read_text();note.write_text(original.replace('## Change Log','![Escape](../../../outside.png)\n\n## Change Log'))
+    rc,out=invoke('plan')
+    check('bridge rejects image path escapes',rc==1 and 'unsafe path' in out,out)
+    note.write_text(original)
+    (vault/'alpha/docs/assets/a.png').unlink();(vault/'alpha/docs/assets/a.png').symlink_to(root/'outside')
+    rc,out=invoke('sync')
+    check('bridge refuses symlink destinations',rc==1 and 'symlink' in out,out)
+    (vault/'alpha/docs/assets/a.png').unlink();invoke('sync')
+    # Fake OS executables exercise notification/scheduling CLI without touching launchd.
+    fake=root/'fakebin';fake.mkdir()
+    for executable in ['osascript','launchctl']:
+        f=fake/executable
+        f.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "'+str(root/'os-calls')+'"\nexit 0\n');f.chmod(0o755)
+    env={'PATH':str(fake)+os.pathsep+os.environ['PATH']}
+    rc,out=invoke('notify-test',env=env)
+    check('notification helper uses built-in script host with data arguments',rc==0 and 'display notification' in (root/'os-calls').read_text(),out)
+    if sys.platform=='darwin':
+        cfg=json.loads(conf.read_text());cfg['launchagents_dir']=str(root/'LaunchAgents');cfg['notifications']='errors';conf.write_text(json.dumps(cfg))
+        rc,out=invoke('schedule-enable',env=env)
+        import plistlib
+        plist=plistlib.loads((root/'LaunchAgents/org.folderwise.ibridge.plist').read_bytes())
+        calls=(root/'os-calls').read_text()
+        check('schedule registers isolated LaunchAgent and announces configured interval',rc==0 and plist['StartInterval']==300
+              and 'bootstrap' in calls and 'scheduled every 5 minutes' in calls,out)
+        rc,out=invoke('schedule-disable',env=env)
+        check('schedule disable removes only the owned job definition',rc==0 and not (root/'LaunchAgents/org.folderwise.ibridge.plist').exists(),out)
+    else:
+        rc,out=invoke('schedule-enable',env=env)
+        check('non-Mac scheduling fails with a clear diagnostic',rc==1 and 'requires macOS' in out,out)
+
+    # A file obstructing a new asset directory leaves a recoverable partial export.
+    new_assets=alpha/'docs/new';new_assets.mkdir()
+    (new_assets/'snapshot.png').write_bytes(b'new image')
+    note.write_text(note.read_text().replace('## Change Log','![New](new/snapshot.png)\n\n## Change Log'))
+    local('docs_stamp.py','docs/checklist.md','--by','human','--summary','Add recovery image',cwd=alpha)
+    sh(['git','add','-A'],cwd=alpha);sh(['git','commit','-qm','Add recovery asset'],cwd=alpha)
+    obstruction=vault/'alpha/docs/new';obstruction.write_text('obstructed directory')
+    rc,out=invoke('sync')
+    check('failed export retains a replay journal',rc==1 and (home/'export.json').exists(),out)
+    (new_assets/'snapshot.png').write_bytes(b'changed source during recovery')
+    rc,out=invoke('sync')
+    check('recovery refuses changed source payloads',rc==1 and 'source changed during interrupted export' in out,out)
+    (new_assets/'snapshot.png').write_bytes(b'new image')
+    mirror.write_text(mirror.read_text().replace('First task','Phone edit during recovery'))
+    rc,out=invoke('sync')
+    check('recovery preserves phone edits made after a partial export',rc==1 and 'Phone edit during recovery' in mirror.read_text(),out)
+    mirror.write_text(note.read_text());obstruction.unlink()
+    rc,out=invoke('sync')
+    check('retry finishes partial export and advances baseline once',rc==0 and not (home/'export.json').exists()
+          and (vault/'alpha/docs/new/snapshot.png').read_bytes()==b'new image',out)
+    # Identical task text stays separate, but a concurrent source edit makes it ambiguous.
+    view.write_text(view.read_text().replace('- [ ] Duplicate','- [x] Duplicate',1))
+    note.write_text(note.read_text().replace('## Change Log','Concurrent prose.\n\n## Change Log'))
+    local('docs_stamp.py','docs/checklist.md','--by','human','--summary','Concurrent prose',cwd=alpha)
+    sh(['git','add','-A'],cwd=alpha);sh(['git','commit','-qm','Concurrent prose'],cwd=alpha)
+    rc,out=invoke('sync')
+    check('duplicate task cannot be misidentified after a concurrent Mac edit',rc==1 and 'duplicate task moved' in out,out)
+    view.write_text(view.read_text().replace('- [x] Duplicate','- [ ] Duplicate',1));invoke('sync')
+    view.write_text(view.read_text().replace('- [x] First task','- [ ] First task'))
+    invoke('disable','alpha')
+    rc,out=invoke('sync')
+    check('disabling never discards a pending phone toggle',rc==1 and 'pending phone edits' in out and view.exists(),out)
+    invoke('enable','alpha')
+    sh(['git','add','.docs.yaml'],cwd=alpha);sh(['git','commit','-qm','Restore bridge setting'],cwd=alpha)
+    invoke('sync')
+    # Adapter contract failures and generated-source warnings are explicit.
+    cfg=json.loads(conf.read_text());original_cfg=dict(cfg)
+    cfg['adapters']={'alpha':[sys.executable,'-c','print("{}")']};conf.write_text(json.dumps(cfg))
+    rc,out=invoke('sync')
+    check('malformed adapter response fails visibly without replacing the vault',rc==1 and 'JSON array' in out,out)
+    cfg['adapters']={};conf.write_text(json.dumps(cfg));invoke('sync')
+    check('unmapped generated tasks are explicitly reported','requires an adapter' in (vault/'Bridge Status.md').read_text())
+    conf.write_text(json.dumps(original_cfg));invoke('sync')
+    # Attachment references, image ordering and unknown files remain predictable.
+    original=note.read_text()
+    note.write_text(original.replace('## Change Log','![Ref][asset]\n\n[asset]: assets/a.png\n\n![[a.png]]\n![Missing](assets/not-tracked.png)\n![Remote](https://example.invalid/a.png)\n\n## Change Log'))
+    rc,out=invoke('plan')
+    check('lean resolves reference and wiki embeds and reports missing images',rc==0 and 'missing or not tracked' in out,out)
+    note.write_text(original)
+    unknown=vault/'alpha/new-phone-note.md';unknown.write_text('A capture is outside this PR.\n')
+    invoke('sync');check('unknown phone files remain intact',unknown.read_text()=='A capture is outside this PR.\n')
+    cfg=json.loads(conf.read_text());backup=dict(cfg)
+    for changes,reason in [({'version':2},'unsupported bridge config'),({'vault':cfg['source']},'separate'),
+                           ({'mode':'bad'},'invalid mode'),({'interval_minutes':None},'cannot be null'),
+                           ({'source':'relative'},'absolute paths'),({'adapters':[]},'adapters must')]:
+        conf.write_text(json.dumps(dict(backup,**changes)))
+        rc,out=invoke('status');check('invalid bridge config: '+reason,rc==1 and reason in out,out)
+    conf.write_text(json.dumps(backup))
+    rc,out=invoke('disable','../alpha');check('project helper rejects path traversal',rc==1 and 'folder name' in out,out)
+    # Lock contention prevents a second sync from racing the first.
+    import fcntl
+    with (home/'lock').open('a') as stream:
+        fcntl.flock(stream,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        rc,out=invoke('sync');check('overlapping bridge processes do not race',rc==1 and 'another bridge' in out,out)
+    if sys.platform=='darwin':
+        cfg=json.loads(conf.read_text());cfg['launchagents_dir']=str(root/'LaunchAgents');cfg['notifications']='errors';conf.write_text(json.dumps(cfg))
+        rc,out=invoke('schedule-enable',env=env)
+        rc,out=invoke('doctor',env=env);check('doctor checks loaded schedule without parsing launchctl output',rc==0,out)
+        invoke('configure','--interval-minutes','10')
+        rc,out=invoke('doctor',env=env);check('doctor diagnoses interval that needs schedule reload',rc==1 and 'interval changed' in out,out)
+        invoke('configure','--interval-minutes','5')
+        saved=json.loads((home/'last-run.json').read_text());saved['last_run_epoch']=0;(home/'last-run.json').write_text(json.dumps(saved))
+        rc,out=invoke('doctor',env=env);check('doctor diagnoses stale scheduled runs',rc==1 and 'stale' in out,out)
+        invoke('schedule-disable',env=env)
+    # Explicit notification failure is diagnostic and never mutates task records.
+    (fake/'osascript').write_text('#!/bin/sh\nexit 1\n')
+    rc,out=invoke('notify-test',env=env)
+    check('notification failure is reported by the explicit test command',rc==1 and 'delivery failed' in out,out)
+    (home/'bridge.log').write_text('old log\n'*150000)
+    invoke('sync')
+    check('local bridge log rotates instead of growing forever',(home/'bridge.previous.log').exists())
+
+
 SECTIONS = [
     ("create", s_create), ("new_doc", s_new_doc_and_index), ("stamp", s_stamp_and_hook), ("hook", s_hook_fail_closed),
     ("lint", s_lint_rules), ("timezone", s_timezone), ("links", s_links), ("toc", s_toc), ("mv", s_mv),
     ("tables", s_tables), ("stale", s_stale_index_recent), ("sync", s_sync),
-    ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache),
+    ("ibridge", s_ibridge), ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache),
     ("framework_checkout", s_framework_checkout), ("framework_index", s_framework_index), ("ci_allowlist", s_ci_allowlist),
 ]
 

@@ -2,6 +2,7 @@ schema_version: 1
 project: {{PROJECT}}
 description: {{DESCRIPTION_YAML}}
 sensitivity: {{SENSITIVITY}}   # default for new docs: public | private | restricted
+icloud_disabled: false   # opt out of the optional iCloud bridge with true
 owner: human
 timezone: {{TIMEZONE}}   # IANA name; all dates/timestamps in this project use it
 review_every_default: 90d

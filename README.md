@@ -92,6 +92,7 @@ Folderwise includes metadata and link validation, CSV-to-Markdown tables, genera
 | 🔎 `docs_index.py` / `docs_recent.py` / `docs_stale.py` | what exists, what changed lately, what is due for re-verification |
 | 🔀 `docs_mv.py` | moves or renames docs and headings and keeps every link valid |
 | 📊 `render_tables.py` | renders CSV files into Markdown tables |
+| ☁️ `icloud_bridge.py` | mirror projects into iCloud, complete tasks across projects on iPhone, and commit changes on Mac |
 | 🩺 `docs_doctor.py` / `sync_rules.py` | health-check projects; push the template's shared rules into them |
 
 Every tool, flag and setting is documented in the [full guide](docs/guide.md).
@@ -105,10 +106,10 @@ Every tool, flag and setting is documented in the [full guide](docs/guide.md).
 <sub>Obsidian demo with fictional notes. Cross-project links shown are demo-only; Folderwise currently validates links within each repository.</sub>
 
 
-Obsidian adds search, backlinks, and visual navigation over your files. For Mac and iPhone, you can configure an Obsidian/iCloud workflow; syncing and Git commits remain separate. [Read the setup guide →](docs/obsidian.md)
+Obsidian adds search, backlinks, and visual navigation over your files. The optional iCloud bridge adds a central iPhone task dashboard, completed-task reopening, automatic local commits on Mac, storage controls, and macOS notifications. Your repositories stay outside iCloud. [Read the setup guide →](docs/obsidian.md)
 
 > [!NOTE]
-> Your topic folders are separate repositories, ignored by the framework's Git checkout. Folderwise does not upload them automatically or provide its own sync service. [Understand the layout](docs/framework-checkout.md).
+> Your topic folders are separate repositories, ignored by the framework's Git checkout. The optional bridge copies selected project files into your own iCloud vault; Folderwise provides no hosted sync service. [Understand the layout](docs/framework-checkout.md).
 
 ## 🔄 Keep it current
 
@@ -122,7 +123,7 @@ Check project health and recent updates, then review any notes whose verificatio
 
 ## 🔒 Privacy and safety
 
-- 🏠 Your knowledge stays local, in your own Git repositories. Folderwise does not upload it or provide a sync service.
+- 🏠 Your knowledge stays local, in your own Git repositories. Optional iCloud export is user-configured; Folderwise provides no hosted sync service.
 - 🚧 The framework repository is an allowlist, and a guard rejects knowledge projects, secrets, caches, symlinks and nested repositories before they can be committed.
 - ⚠️ The guard checks paths, not meaning: review diffs before publishing, and never put passwords or tokens in documents.
 - 🤖 The shipped agent permission defaults are defaults, not a security boundary. Review them before using an agent.
