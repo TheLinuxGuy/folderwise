@@ -742,8 +742,11 @@ def s_ci_allowlist():
     declared = {m.group(1) for m in re.finditer(r"^!/(\.github/\S*[^/\s])$", (src_root / ".gitignore").read_text(), re.M)}
     check(".gitignore re-includes exactly the CI files the guard allows", declared == set(guard.CI_FILES),
           f"only in .gitignore: {sorted(declared - guard.CI_FILES)}; only in guard: {sorted(guard.CI_FILES - declared)}")
-    check("every allowed CI/config path exists in the repository", all((src_root / f).is_file() for f in allowed),
-          str([f for f in allowed if not (src_root / f).is_file()]))
+    if (src_root / ".github").is_dir():  # release archives ship only the tools, not the development-only CI files
+        check("every allowed CI/config path exists in the repository", all((src_root / f).is_file() for f in allowed),
+              str([f for f in allowed if not (src_root / f).is_file()]))
+    else:
+        check("release archive: development-only CI files are absent by design (existence check skipped)", not (src_root / ".coveragerc").exists())
 
     for rel in allowed:
         (sandbox / rel).parent.mkdir(parents=True, exist_ok=True)
