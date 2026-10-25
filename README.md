@@ -1,437 +1,70 @@
-# Folderwise
+<div align="center">
 
-Folders for structure. Markdown for clarity. Git for history. AI agents for upkeep. Obsidian for access across devices.
+<h1><img src="docs/assets/folderwise-hero.png" alt="Folderwise — Human-readable knowledge. AI-assisted upkeep. Markdown and Git underneath. Wherever you need it." width="900"></h1>
 
-**Human-readable knowledge. AI-assisted upkeep. Markdown and Git underneath. Wherever you need it.**
+[![Python 3.10 or later](docs/assets/badge-python.svg)](#getting-started)
+[![Plain Markdown files](docs/assets/badge-format.svg)](docs/guide.md)
+[![MIT licensed](docs/assets/badge-license.svg)](LICENSE)
 
-Knowledge for humans, maintained with AI agents. Plain Markdown, Git history, and optional Obsidian access across devices.
+[Overview](#a-place-for-what-you-know) · [Get started](#getting-started) · [See it in Obsidian](#see-it-in-obsidian) · [Documentation](docs/guide.md)
 
-Folderwise is a framework and toolkit for dedicated knowledge folders: inventories, runbooks, decisions, plans, and reference material. Each topic has its own Git repository. Shared templates and Python tools keep document metadata, links, indexes, change logs, and verification dates consistent.
+</div>
 
-The public repository contains the shared framework. Your personal knowledge stays in separate project folders, ignored by the framework repository by default. Use any Markdown editor; Obsidian is an optional way to search, navigate, and visualize your notes.
+## A place for what you know
 
-Requires Git, Python 3.10 or later, and [uv](https://docs.astral.sh/uv/getting-started/installation/). The scripts declare their dependencies; uv manages their environments. An AI coding agent is optional. Review the shipped agent permission defaults before using one.
+You solved it once. Keep the instructions, the evidence, and the decisions somewhere you can find them again.
 
-## Install
+**Folderwise** is a Markdown-and-Git framework for knowledge that humans read and AI agents help maintain. Create dedicated projects for your home network, household records, technical runbooks, or anything you expect to revisit.
 
-```bash
+| Organize | Maintain | Revisit |
+|---|---|---|
+| One topic, one folder, one Git history. | Shared rules, change stamps, and checks. | Generated indexes, review dates, and optional Obsidian views. |
+
+## Getting started
+
+**Requires:** Git with a configured author identity, Python 3.10+, and [uv](https://docs.astral.sh/uv/getting-started/installation/).
+
+```sh
 git clone https://github.com/TheLinuxGuy/folderwise.git ~/folderwise
 cd ~/folderwise
 git config core.hooksPath _tools/framework-hooks
-uv run _tools/selftest.py
+uv run _tools/new_project.py
 ```
 
-Examples below assume `~/folderwise`; substitute your actual clone location if different. New topic folders live beside `_tools/` and `_template/`, with independent Git histories. Their files are not part of this public repository.
+Choose a topic, describe its purpose, and set its sensitivity. Folderwise creates its Git repository, starter files, and an agent setup prompt. Give that prompt to Codex or Claude Code to shape the project, or edit the files yourself.
 
-See [framework updates and existing folders](docs/framework-checkout.md), [Obsidian on Mac and iPhone](docs/obsidian.md), and [contributing](CONTRIBUTING.md).
 
-Jump to: [Quick start](#quick-start) · [If a commit is blocked](#if-a-commit-is-blocked) · [Values you will be asked for](#values-you-will-be-asked-for) · [Reference](#reference)
+> [!TIP]
+> You don't need to organize your whole life first. Pick one useful question—“How do I recover this service?”—and document the answer.
 
-## Quick start
+## From notes to a maintained knowledge folder
 
-Every block below is complete: paste it into a terminal from any folder (they start with `cd`). Examples use the `finances` project; swap in your project folder name. Use `--by human` when you run a tool yourself; agents use `--by <agent>/<model>`, for example `--by codex/gpt-5.5`.
+1. **Describe the topic.** Give an agent your context and choose a folder structure.
+2. **Document what matters.** Use reference notes, inventories, runbooks, decisions, plans, and logs.
+3. **Keep it useful.** Record changes, review the diff, and check which notes are due for verification.
 
-### Create a new project
+Folderwise includes metadata and link validation, CSV-to-Markdown tables, generated indexes, and a staged-document hook. The [full guide](docs/guide.md) covers the tools and their conventions.
 
-Makes the folder, its own git repo (branch `main`), shared agent rules, the pre-commit hook and a first commit. Folder names are lowercase letters, digits and hyphens.
+## See it in Obsidian
 
-```bash
-cd ~/folderwise && uv run _tools/new_project.py --name homelab-inventory --description "Inventory of home network hardware and software to allow for homelab v3 planning" --sensitivity private --by human
-```
+<p align="center">
+  <img src="docs/assets/obsidian-local-graph.png" alt="Fictional Docker host documentation beside its related notes in Obsidian's local graph" width="800">
+</p>
 
-Prefer to be asked the questions instead:
+<sub>Obsidian demo with fictional notes. Cross-project links shown are demo-only; Folderwise currently validates links within each repository.</sub>
 
-```bash
-cd ~/folderwise && uv run _tools/new_project.py
-```
 
-When it finishes it prints a ready-made prompt. Start an agent in the new project (the `cd ... && claude` / `codex` line is printed for you), paste the prompt, and let it run the setup. The agent reads the project files first, then asks you for **one batch of context** (what it tracks, who uses it, how often it changes, recurring agent tasks, what it must never do without your OK, sensitive data, material to import). You answer once, free-form; partial is fine. It then restates what it understood and asks up to 5 follow-ups (8 if essential), each with a recommended default you can accept. After that it proposes 3 genuinely different folder structures; you pick one, and it writes short rules in the project's `AGENTS.md` (never the managed block), creates the folders and starter docs, shows you the diff, and commits once you agree. Add `--no-prompt` to hide the prompt. If you lose the output, this is the prompt for the example above (change the name and purpose):
+Obsidian adds search, backlinks, and visual navigation over your files. For Mac and iPhone, you can configure an Obsidian/iCloud workflow; syncing and Git commits remain separate. [Read the setup guide →](docs/obsidian.md)
 
-```text
-Set up the docs project "homelab-inventory" (purpose: Inventory of home network hardware and software to allow for homelab v3 planning). Read AGENTS.md and .docs.yaml first; never ask what files answer. Then ask nothing yet: list a short fill-in (what it tracks, who uses it, how often it changes, recurring agent tasks, what agents must never do without my OK, sensitive data, material to import) for me to answer once, free-form, partial is fine. Then restate your understanding, flag assumptions, and ask at most 5 follow-ups (8 if essential), one at a time, each with a recommended default and only on gaps that change the structure. Then propose 3 genuinely different folder structures with trade-offs, recommend one, and wait for my choice. After I choose: write short, non-obvious project rules in AGENTS.md (never the managed block), set .docs.yaml extra_fields if useful, create the folders and starter docs with ../_tools/docs_new.py, run ../_tools/docs_lint.py, show me the diff, and commit once I agree.
-```
+> [!NOTE]
+> Your topic folders are separate repositories, ignored by the framework's Git checkout. Folderwise does not upload them automatically or provide its own sync service. [Understand the layout](docs/framework-checkout.md).
 
-To skip the pasting, add `--start claude` (or `--start codex`): after creating the project it starts that agent inside the new folder with the prompt already filled in. It needs an interactive terminal and the agent on your PATH; otherwise it just prints what to run.
+## Keep it current
 
-```bash
-cd ~/folderwise && uv run _tools/new_project.py --name homelab-inventory --description "Inventory of home network hardware and software to allow for homelab v3 planning" --sensitivity private --by human --start claude
-```
-
-### Open a project
-
-In VS Code:
-
-```bash
-code ~/folderwise/finances
-```
-
-With Claude Code:
-
-```bash
-cd ~/folderwise/finances && claude
-```
-
-With Codex:
-
-```bash
-cd ~/folderwise/finances && codex
-```
-
-### Start a new doc
-
-Creates `docs/hosts/nas.md` from the skeleton for its type (as a `draft`) and adds it to the README index. Types: `overview`, `reference`, `runbook`, `decision`, `inventory`, `plan`, `log`.
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/docs_new.py docs/hosts/nas.md --type inventory --title "NAS inventory" --about "Disks, volumes and shares on the NAS" --by human
-```
-
-### After you edit a doc
-
-Stamp it: updates `updated`, `updated_by`, the status line and the Change Log. Every edit needs a stamp.
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/docs_stamp.py docs/hosts/nas.md --by human --summary "Add disk table"
-```
-
-Same, but also record that you checked the content against the real thing (sets `last_verified`):
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/docs_stamp.py docs/hosts/nas.md --by human --summary "Verified against the NAS UI" --verified
-```
-
-A file you wrote by hand that has no front matter yet:
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/docs_stamp.py docs/notes.md --init --type reference --by human --summary "Initial draft"
-```
-
-If you changed a doc's title, summary or status, refresh the README index too:
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/docs_index.py --write --by human --summary "Refresh index"
-```
-
-### Check and commit
-
-Validate every doc (front matter, status line, Change Log, links, tables, index):
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/docs_lint.py
-```
-
-Commit (the pre-commit hook runs the same check on what you staged):
-
-```bash
-cd ~/folderwise/finances && git add -A && git commit -m "Describe what changed"
-```
-
-### See what exists, what changed, what is stale
-
-What docs exist (type, status, dates, summary):
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/docs_index.py
-```
-
-What changed in the last 7 days, newest first, from the Change Logs (no git needed):
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/docs_recent.py --since 7d
-```
-
-What is overdue for re-verification, plus what falls due in the next 14 days:
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/docs_stale.py --within 14
-```
-
-Git history with times in Los Angeles time:
-
-```bash
-cd ~/folderwise/finances && TZ=America/Los_Angeles git log --date=format-local:'%F %R %Z' --format='%h %ad %an  %s'
-```
-
-### Health check
-
-One project (hook installed, rules in sync, config valid, git clean, lint, overdue docs):
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/docs_doctor.py
-```
-
-Every project:
-
-```bash
-cd ~/folderwise && uv run _tools/docs_doctor.py --all
-```
-
-### Move or rename a doc (keeps links working)
-
-Never use `mv` for docs. Preview first, then run it again without `--dry-run`:
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/docs_mv.py mv docs/hosts/nas.md docs/storage/nas.md --by human --dry-run
-```
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/docs_mv.py mv docs/hosts/nas.md docs/storage/nas.md --by human
-```
-
-Rename a heading (fixes `#anchor` links to it):
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/docs_mv.py heading docs/storage/nas.md "Old heading" "New heading" --by human
-```
-
-### Edit a table that comes from a CSV
-
-Change the CSV in `data/`, then re-render every doc that embeds it:
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/render_tables.py --by human --summary "Update hosts table"
-```
-
-Only check whether any table is out of date:
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/render_tables.py --check
-```
-
-### Add or remove a table of contents on one doc
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/docs_stamp.py docs/storage/nas.md --toc --by human --summary "Add contents"
-```
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/docs_stamp.py docs/storage/nas.md --no-toc --by human --summary "Remove contents"
-```
-
-### Update shared rules and config in your projects
-
-After the template changes (`_template/`), see which projects drifted:
-
-```bash
-cd ~/folderwise && uv run _tools/sync_rules.py --check
-```
-
-Apply it to one project, or to all (then review and commit inside each project):
-
-```bash
-cd ~/folderwise && uv run _tools/sync_rules.py finances
-```
-
-```bash
-cd ~/folderwise && uv run _tools/sync_rules.py
-```
-
-### Verify the tools themselves
-
-Run after any change to `_tools/` or `_template/` (about 15 seconds; it must say all checks passed):
-
-```bash
-cd ~/folderwise && uv run _tools/selftest.py
-```
-
-### Weekly routine
-
-```bash
+```sh
 cd ~/folderwise
 uv run _tools/docs_doctor.py --all
-uv run _tools/docs_stale.py --all
 uv run _tools/docs_recent.py --all --since 7d
 ```
 
-## If a commit is blocked
-
-The pre-commit hook lints what you staged and prints the problem. Fix, `git add -A`, commit again. To see every problem at once, run `docs_lint.py` (see "Check and commit").
-
-**`edited but Change Log unchanged`** or **`byline is out of date`**: you edited a doc without stamping it.
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/docs_stamp.py docs/hosts/nas.md --by human --summary "Describe the edit"
-```
-
-**`index block is out of date`** (README): a doc was added, renamed, or its title, summary or status changed.
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/docs_index.py --write --by human --summary "Refresh index"
-```
-
-**`Contents is out of date`**: a doc with a table of contents had its headings changed; stamp it again (command above).
-
-**`generated table block(s) out of date`**: a CSV changed.
-
-```bash
-cd ~/folderwise/finances && uv run ../_tools/render_tables.py --by human --summary "Re-render tables"
-```
-
-**`broken link`**: the message names the file and line. Fix the link, or if you moved a file by hand put it back and use `docs_mv.py` (see "Move or rename a doc").
-
-**`docs tools not found`** or **`uv not found`**: the project folder must sit directly inside `Folderwise` (next to `_tools/`), and `uv` must be installed. As a last resort, bypass the check for one commit (this skips lint, so use it deliberately):
-
-```bash
-cd ~/folderwise/finances && DOCS_SKIP_HOOK=1 git commit -m "Describe what changed"
-```
-
-**Hook missing** (for example after cloning a project, since git does not copy hooks): reinstall it.
-
-```bash
-cd ~/folderwise && uv run _tools/sync_rules.py finances
-```
-
-## Values you will be asked for
-
-| Option | Allowed values |
-|---|---|
-| `--name` | lowercase letters, digits and hyphens, for example `homelab-inventory` |
-| `--sensitivity` | `public`, `private` or `restricted` (use `restricted` for account details; the doctor then warns if a remote is added) |
-| `--by` | `human` or `<agent>/<model>`, for example `codex/gpt-5.5` or `claude/sonnet-5-5` |
-| `--type` (docs) | `overview`, `reference`, `runbook`, `decision`, `inventory`, `plan`, `log` |
-| doc `status` | `draft`, `active`, `deprecated`, `archived` (closed period: frozen, skipped by staleness reports) |
-| `review_every` | `30d`, `12w`, `6m` |
-| `--timezone` (new project) | an IANA name; default `America/Los_Angeles` |
-
-Never put passwords, tokens or keys in docs; name where they are stored instead (for example "password manager item X").
-
-## Reference
-
-### How it fits together
-
-All tools are single-file Python scripts run with `uv run`. Inside a project they are `../_tools/<name>`; from the Folderwise root they are `_tools/<name>`.
-
-uv uses its platform-default cache location. The committed `uv.toml` contains no machine-specific cache path. You can set `UV_CACHE_DIR` locally when needed; `selftest.py -k uv_cache` checks portability and override behavior.
-
-| Tool | Use it to | Where |
-|---|---|---|
-| `new_project.py` | create a project (own git repo, rules, hook, README) | root |
-| `docs_new.py` | start a doc from the skeleton for its type | project |
-| `docs_stamp.py` | after any edit: update `updated`, `updated_by`, byline, Change Log (`--verified`, `--toc`, `--init`) | project |
-| `docs_lint.py` | validate front matter, byline, Change Log, tables, links, README index | project |
-| `docs_index.py` | list what docs exist; `--write` refreshes the README index | project |
-| `docs_recent.py` | list what changed lately from the Change Logs (no git needed) | project / `--all` |
-| `docs_stale.py` | list docs overdue for re-verification | project / `--all` |
-| `docs_mv.py` | move or rename a doc/folder or a heading and keep links valid | project |
-| `render_tables.py` | render CSV-backed tables into docs | project |
-| `docs_doctor.py` | health check of a project's setup (hook, sync, config, git, lint, staleness) | project / `--all` |
-| `sync_rules.py` | push the template's rules, hook and config files into projects | root |
-| `selftest.py` | verify the tools themselves | root |
-| `framework_guard.py` | prevent knowledge folders, secrets, symlinks, or nested repositories from entering the framework index | root |
-
-Every agent rule lives in each project's `AGENTS.md` (shared block from `_template/AGENTS.md`); this README is the human guide. See the root `AGENTS.md` for the layout and the rules for changing the tools.
-
-### Project settings (`.docs.yaml`)
-
-Each project has a `.docs.yaml` at its root. Unknown keys are reported by `docs_doctor.py`.
-
-| Key | Default | Meaning |
-|---|---|---|
-| `schema_version`, `project`, `description` | set by `new_project.py` | identity of the project |
-| `sensitivity` | asked at creation (`private`) | default `sensitivity` for new docs: `public`, `private` or `restricted` |
-| `owner` | `human` | default `owner` for new docs |
-| `timezone` | `America/Los_Angeles` | IANA zone for every date and Change Log time in the project |
-| `review_every_default` | `90d` | default `review_every` for new docs (`30d`, `12w`, `6m`) |
-| `byline` | `true` | generated `Status · Updated` line under each title |
-| `doc_types` | overview, reference, runbook, decision, inventory, plan, log | allowed `doc_type` values |
-| `extra_fields` | none | project-specific front matter fields (`type`: string, int, bool, list, date; optional `values`, `required`) |
-| `max_doc_lines` | `400` | lint warns (does not fail) above this many lines |
-| `toc_depth` | `2` | for docs with `toc: true`: 2 = `##` only, 3 adds `###` |
-| `inline_table_max_rows` | `8` | larger markdown tables must come from a CSV (0 = every table) |
-| `exclude` | `AGENTS.md`, `CLAUDE.md`, `_*`, `.*`, `node_modules` | file and folder name patterns the docs tools skip |
-
-### Health check (what the doctor looks at)
-
-It prints OK / WARN / FAIL per item with the command that fixes it, and exits 1 on any FAIL (`--strict` also fails on warnings). It checks that the tools and `uv` are reachable, no `CLAUDE.md` exists above the project (see below), the project is a git repo with the current pre-commit hook (git does not copy hooks when you clone, so a fresh clone needs `sync_rules.py`), the `AGENTS.md` block and config files match the template, `.docs.yaml` is valid, there are no uncommitted files, a `restricted` project has no remotes, lint is clean (plus orphan, size and placeholder warnings), and nothing is overdue for re-verification. Good first step after cloning or moving a project, and a good weekly agent task.
-
-The pre-commit hook fails closed: if a project cannot find `../_tools` or `uv`, its commits are blocked. `DOCS_SKIP_HOOK=1 git commit ...` bypasses it once; use it only deliberately.
-
-### Instruction files: Codex and Claude Code
-
-- Each project has an `AGENTS.md` (your project-specific rules plus the shared managed block) and a `CLAUDE.md` containing only `@AGENTS.md`. Codex reads `AGENTS.md`; Claude Code reads `CLAUDE.md`, which pulls `AGENTS.md` in.
-- The Folderwise root has an `AGENTS.md` for maintaining the tools, and deliberately **no `CLAUDE.md`**. Claude Code loads `CLAUDE.md` files from the working directory and every directory above it, so a root one would load into every project session and trigger the "imports files outside the current working directory" approval prompt. With none at the root, a project session loads only its own rules, and a session at the root reads the root `AGENTS.md` natively (Claude Code v2.1.277 or later).
-- Do not create `CLAUDE.md`, `CLAUDE.local.md` or `.claude/CLAUDE.md` at the root or above it. `docs_doctor.py` warns and `selftest.py` fails if one appears. Your personal `~/.claude/CLAUDE.md` is unaffected.
-- Claude Code's `/config` setting **Project instructions** should stay at its default; `claude-md-and-agents-md` would load the root `AGENTS.md` into project sessions again.
-
-### Claude Code settings in each project (`.claude/settings.json`)
-
-`new_project.py` creates `.claude/settings.json` from the template, `sync_rules.py` merges template changes into existing projects (template values win; keys and rules only the project has are kept), and `.claude/settings.local.json` (your personal overrides) is git-ignored.
-
-| Setting | Value | Why |
-|---|---|---|
-| `permissions.defaultMode` | `acceptEdits` | file edits and common filesystem commands run without prompting |
-| `permissions.allow` | `uv run ../_tools/*`, `git add *`, `git commit *` | the doc workflow (stamp, lint, commit) never prompts |
-| `permissions.ask` | `git push *`, `mv *`, `git mv *` | pushing needs a decision; moves of docs should go through `docs_mv.py` |
-| `model` | `sonnet` | default to the Sonnet alias (currently Sonnet 5.5); switch for one session with `/model` |
-| `effortLevel` | `low` | default reasoning effort: faster and cheaper for routine doc edits. `/effort high` (or `--effort`) overrides it for the session; the project default returns next session. To change it for good, set `effortLevel` in `.claude/settings.local.json` (git-ignored). Do not use the `CLAUDE_CODE_EFFORT_LEVEL` env var: it outranks `/effort` and locks the level |
-| `autoMemoryEnabled` | `false` | `AGENTS.md` and the docs are the single source of truth; unversioned per-machine memory can contradict them and is loaded every session |
-| `attribution` | commit and PR `""` | no extra `Co-Authored-By` trailer; commits already carry `Agent:` and `Model:` trailers |
-
-**Skipping permission prompts entirely:** Claude Code ignores `bypassPermissions` and `auto` as `defaultMode` in a *project's* settings files (since Aug 2026), so a project cannot enable it for itself. Options: start a session with `claude --permission-mode bypassPermissions`, or set it in your user-level `~/.claude/settings.json` (applies to every project on this machine). No deny rules are shipped; any you add under `permissions.deny` still apply in bypass mode, but prefix rules do not match variants such as `git -C . push`.
-
-### Generated tables from CSV
-
-Tables of records (inventories, ledgers, lots, hosts) live in `data/*.csv` and are embedded in docs as generated blocks:
-
-```markdown
-<!-- table:start src=data/hosts.csv cols=name,ip sort=name -->
-<!-- table:end -->
-```
-
-- Options after `src=`: `cols=a,b`, `where=col=value`, `sort=col,-col2`, plus the opt-in money options below.
-- Never edit inside a block. Edit the CSV, then run `render_tables.py` (see "Edit a table that comes from a CSV"), which re-renders and stamps the affected docs. `docs_lint.py` fails if a block is stale.
-- Markdown tables longer than `inline_table_max_rows` (default 8) fail lint; move them to a CSV. The Change Log table is exempt.
-- Computed columns (totals, gains) come from a project script under `scripts/` that writes derived CSVs, never from hand calculation.
-- Moving a CSV with `docs_mv.py` updates the `src=` paths.
-
-#### Money columns (opt-in display)
-
-Keep ledger values as plain decimals in the CSV (`21000`, `3500.50`; no `$`, no thousands separators). A table directive can ask for currency-aware display of chosen columns:
-
-```markdown
-<!-- table:start src=data/accounts.csv cols=id,balance,currency,rate money=balance -->
-<!-- table:end -->
-```
-
-- `money=col1,col2` turns formatting on for exactly those columns. Without it, output is identical to before; every other column is shown verbatim. Unknown column names are an error.
-- Format: USD as `$21,000.00` (negatives `-$1,234.50`); any other currency as `1,234,567.50 EUR` (thousands separators, two decimals, ISO code after the amount). Rounding is half-up to two places, display only; the CSV keeps the exact value.
-- Currency comes from the row's `currency` column (`currency_col=name` picks another column). A blank cell there falls back to `currency=XXX` when given.
-- Tables with no currency column must set `currency=XXX` (3-letter ISO code), or the block fails to render. `currency=` and `currency_col=` do nothing without `money=`.
-- Only a plain decimal (`-?digits[.digits]`) is formatted. Blank, `unknown`, `n/a`, already-formatted (`$5`, `1,000`), percentages, and values whose row currency is missing (with no `currency=`) or not a 3-letter code stay unchanged.
-- Never list rates, quantities, dates, IDs, account numbers or percentages in `money=`; nothing is inferred from column names or values.
-- `where=` and `sort=` use the raw CSV values, so ordering and filtering do not change when `money=` is added.
-
-### Links between docs
-
-Refer to other docs with relative markdown links so a click in VS Code (Cmd+click) opens them: `[RSU grants](../rsu/grants.md#vest-events)`.
-
-- Path is relative to the file containing the link, with forward slashes, the `.md` extension and exact letter case. `#anchor` is the heading in lowercase with hyphens.
-- No absolute paths, `file://` URLs or links that leave the project repo (name other projects in plain text).
-- `docs_lint.py` (also run by the pre-commit hook) fails on broken links and warns when prose names an existing doc without linking it.
-- To move or rename a doc or folder, or rename a heading, use `docs_mv.py` instead of `mv` (see "Move or rename a doc"): it rewrites the links (and `#anchors`) that point to it, stamps the touched docs and lints.
-- It lists plain-text mentions and scripts/CSVs that still name the old path (`NOTE` lines); fix those by hand.
-
-### Optional table of contents
-
-Off by default: VS Code's Outline panel (Explorer sidebar, or `Cmd+Shift+O`) already lists a doc's headings. For a long doc you can opt in per file (see "Add or remove a table of contents on one doc").
-
-- The setting is `toc: true` in the doc's front matter. It adds a `## Contents` list between `<!-- toc:start -->` and `<!-- toc:end -->`, before the first `##` section.
-- Never edit the list by hand. Every stamp regenerates it, and `docs_lint.py` fails if it is stale (for example after renaming a heading), so re-stamp the doc after changing headings.
-- Depth comes from `toc_depth` in the project's `.docs.yaml`: 2 (default) lists `##` headings, 3 also lists `###`.
-
-### Human-readable extras
-
-- **Byline:** a generated `> Status · Updated (date and who)` line sits under each doc's title (`byline: true` in `.docs.yaml`, the template default). The VS Code preview hides front matter, so this is where you see status and last update. Verification, review dates and sensitivity stay in the front matter (use `docs_index.py` or `docs_stale.py` for those). Never edit it; stamping regenerates it and lint fails if it is stale.
-- **README index:** `## Contents` in each project README is generated between `<!-- index:start -->` and `<!-- index:end -->` from every doc's title, optional front matter `summary`, type and status. Refresh with `docs_index.py --write`; lint fails if stale and warns about docs nothing links to.
-- **Skeletons:** `docs_new.py` starts a doc from `_tools/skeletons/<type>.md` (override per project with `_skeletons/<type>.md`) as `draft`; lint warns about leftover ``TODO: fill in`` in non-draft docs.
-- **VS Code:** each project ships `.vscode/settings.json` (hides front matter in the preview, validates Markdown links, offers to update links when you move files in the Explorer, wraps lines), `.vscode/extensions.json` (recommended extensions) and `.markdownlint.json`.
-
-
-## Framework versus knowledge
-
-The root `.gitignore` ignores every root entry unless explicitly allowed. The public roots are `_tools/`, `_template/`, `docs/` (framework guides), and the named root files. A new topic folder is ignored automatically, including its independent Git repository. Do not place personal knowledge inside an allowed framework root.
-
-`_tools/framework_guard.py` validates the entire staged framework index. The framework pre-commit and pre-push hooks run it when `core.hooksPath` is configured as shown above. Git ignore rules and local hooks prevent routine mistakes; they can be bypassed deliberately and are not an access-control boundary. Never store credentials in knowledge documents.
-
-## License
-
-Folderwise is available under the [MIT License](LICENSE). Optional third-party apps and services retain their own pricing and licenses. Folderwise does not implement iCloud synchronization or automatic Git commits.
+Check project health and recent updates, then review any notes whose verification is due with `docs_stale.py`. A recorded verification date reflects a check someone performed; it does not prove the contents are correct.

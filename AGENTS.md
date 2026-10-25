@@ -15,7 +15,7 @@ The root `.gitignore` is an allowlist. Never add knowledge projects, caches, cre
   - `docs_index.py` — catalogue of docs (what exists); `--write` refreshes the generated README index
   - `docs_recent.py` — merged Change Logs: what changed lately, across docs or projects
   - `render_tables.py` — render CSV-backed tables in docs and stamp changed docs (`--check` for drift)
-    - Opt-in money display: `money=col,col2` (+ `currency=XXX` when the CSV has no `currency` column, or `currency_col=name`) formats only those columns (`$21,000.00`; `1,234.50 EUR`); CSVs stay plain decimals and directives without `money=` render exactly as before. Details: README.md "Money columns"
+    - Opt-in money display: `money=col,col2` (+ `currency=XXX` when the CSV has no `currency` column, or `currency_col=name`) formats only those columns (`$21,000.00`; `1,234.50 EUR`); CSVs stay plain decimals and directives without `money=` render exactly as before. Details: docs/guide.md "Money columns"
   - `docs_mv.py` — move/rename a doc or folder, or rename a heading, rewriting links and anchors (`--dry-run` to preview)
   - `docs_doctor.py` — health check of a project's setup (hook, template sync, config, git, lint, staleness); `--all` for every project
   - `sync_rules.py` — push the template's shared rules, hook and config files (`.vscode/*`, `.markdownlint.json`, `_doc-template.md`) into all projects (`--check` for drift)
@@ -35,6 +35,6 @@ The root `.gitignore` is an allowlist. Never add knowledge projects, caches, cre
 ## Changing the tools or template (verification required)
 - Before editing anything in `_tools/` or `_template/`, make sure no other session is editing them (one writer at a time). Snapshot shared inputs and check for concurrent changes before deploying a release.
 - Run `uv run _tools/selftest.py` before you start (to know the baseline) and again when you finish. It must report all checks passed. Use `-k <section>` while iterating (sections: create, new_doc, stamp, hook, lint, timezone, links, toc, mv, tables, stale, sync, doctor, layout, uv_cache, docs_coverage, readme_commands).
-- Every new tool, setting or behaviour gets a check in `_tools/selftest.py` and an entry in README.md (the `docs_coverage` section fails if a tool or `.docs.yaml` setting is undocumented) in the same change. A tool change without a passing self-test is not done.
+- Every new tool, setting or behaviour gets a check in `_tools/selftest.py` and an entry in the public documentation: keep README.md concise and place detailed commands/configuration in docs/guide.md (the `docs_coverage` section checks both and fails if a tool or `.docs.yaml` setting is undocumented) in the same change. A tool change without a passing self-test is not done.
 - When managed template rules change, sync them into affected projects only with the owner's authorization, then validate and commit in each independent project repository. Publishing the framework alone does not authorize modifying knowledge projects.
 - The pre-commit hook fails closed: if a project cannot find `../_tools` or `uv`, its commits are blocked (`DOCS_SKIP_HOOK=1` bypasses once, only when the user says so).

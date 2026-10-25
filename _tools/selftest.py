@@ -533,20 +533,32 @@ def s_layout():
     check("template CLAUDE.md imports AGENTS.md (keeps parent AGENTS.md out of project sessions)", tpl.is_file() and "@AGENTS.md" in tpl.read_text())
 
 
+def public_documentation() -> list[tuple[str, str]]:
+    """The landing README may link to a separate full command guide."""
+    root = SRC_TOOLS.parent
+    docs = [("README.md", (root / "README.md").read_text())]
+    guide = root / "docs" / "guide.md"
+    if guide.is_file():
+        if not re.search(r'\]\(docs/guide\.md(?:#[^)]*)?\)', docs[0][1]):
+            raise ValueError("README must link to docs/guide.md when the guide exists")
+        docs.append(("docs/guide.md", guide.read_text()))
+    return docs
+
+
 def s_docs_coverage():
-    """Every tool and every .docs.yaml setting must be documented in the root README (and tools listed in AGENTS.md)."""
-    readme = (SRC_TOOLS.parent / "README.md").read_text()
+    """Every tool/setting must appear in public docs; root AGENTS.md lists the tools."""
+    readme = "\n".join(text for _, text in public_documentation())
     agents = (SRC_TOOLS.parent / "AGENTS.md").read_text()
     for f in sorted(SRC_TOOLS.glob("*.py")):
         if f.stem in ("docslib", "docsextra"):
             continue
-        check(f"README documents {f.name}", f.name in readme)
+        check(f"public documentation covers {f.name}", f.name in readme)
         check(f"root AGENTS.md lists {f.name}", f.name in agents)
     keys = {"schema_version", "project", "description"}
     for f in SRC_TOOLS.glob("*.py"):
         keys |= set(re.findall(r'\bcfg(?:\.get\(|\[)"([a-z_]+)"', f.read_text()))
     for k in sorted(keys):
-        check(f"README documents the .docs.yaml setting '{k}'", f"`{k}`" in readme)
+        check(f"public documentation covers the .docs.yaml setting '{k}'", f"`{k}`" in readme)
 
 
 def s_uv_cache():
@@ -610,7 +622,9 @@ def s_readme_commands():
     """Every command in the root README's fenced blocks must be pasteable: real tool, real flags, no <placeholders>,
     `cd` into this very folder, and in-page links that resolve."""
     root = SRC_TOOLS.parent.resolve()
-    readme = (root / "README.md").read_text()
+    documents = public_documentation()
+    landing = documents[0][1]
+    readme = "\n".join(text for _, text in documents)
     helps: dict[tuple, str] = {}
 
     def help_of(name, sub=None):
@@ -654,13 +668,17 @@ def s_readme_commands():
     sys.path.insert(0, str(SRC_TOOLS))
     import new_project as np_  # noqa: E402
     expected = np_.setup_prompt("homelab-inventory", "Inventory of home network hardware and software to allow for homelab v3 planning")
-    check("README shows the exact setup prompt that new_project.py prints (no drift)", expected in readme, expected[:80])
-    check("README has copy-paste commands near the top (quick start)", n_cmds >= 10 and readme.find("## Quick start") < readme.find("## Reference"), f"{n_cmds} commands")
+    check("public documentation shows the exact setup prompt (no drift)", expected in readme, expected[:80])
+    check("public documentation retains the full command reference", n_cmds >= 10, f"{n_cmds} commands")
+    check("landing README has a getting-started section and shell example",
+          bool(re.search(r'^## (Getting started|Quick start)\s*$', landing, re.M))
+          and bool(re.search(r'```(?:bash|sh|zsh)\n', landing)))
     sys.path.insert(0, str(SRC_TOOLS))
     import docslib as dl  # noqa: E402
-    anchors = dl.heading_anchors(readme)
-    for a in sorted(set(re.findall(r"\]\(#([^)]+)\)", readme))):
-        check(f"README in-page link resolves: #{a}", a in anchors)
+    for name, text in documents:
+        anchors = dl.heading_anchors(text)
+        for a in sorted(set(re.findall(r"\]\(#([^)]+)\)", text))):
+            check(f"{name} in-page link resolves: #{a}", a in anchors)
 
 
 SECTIONS = [
