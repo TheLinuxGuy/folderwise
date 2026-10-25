@@ -107,14 +107,14 @@ uv run ~/folderwise-upgrade/_tools/selftest.py
 diff -rq ~/folderwise/_tools ~/folderwise-upgrade/_tools
 ```
 
-5. Preview, then copy. `rsync` without `--delete` only writes files that exist in the new release, and `--backup-dir` keeps the previous version of every overwritten file outside your install. Your project folders are not in the release, so they are not touched:
+5. Preview, then copy. `rsync` without `--delete` only writes files that exist in the new release; `--checksum` compares content, so only files that really differ are replaced (modification times in archives are the release commit's time and say nothing about content); `--backup-dir` keeps the previous version of every overwritten file outside your install. Your project folders are not in the release, so they are not touched:
 
 ```bash
-rsync -a --dry-run --itemize-changes --backup --backup-dir="$HOME/folderwise-backup-before-1.3.0" ~/folderwise-upgrade/ ~/folderwise/
+rsync -a --checksum --dry-run --itemize-changes --backup --backup-dir="$HOME/folderwise-backup-before-1.3.0" ~/folderwise-upgrade/ ~/folderwise/
 ```
 
 ```bash
-rsync -a --itemize-changes --backup --backup-dir="$HOME/folderwise-backup-before-1.3.0" ~/folderwise-upgrade/ ~/folderwise/
+rsync -a --checksum --itemize-changes --backup --backup-dir="$HOME/folderwise-backup-before-1.3.0" ~/folderwise-upgrade/ ~/folderwise/
 ```
 
 6. Verify the upgraded install, then preview (do not apply) template changes for your projects; applying them is a separate, reviewed step that modifies each project repository:

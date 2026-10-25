@@ -807,7 +807,7 @@ def s_readme_commands():
                 continue
             for i, t in enumerate(toks):  # `cd <path>` must point into this folder
                 if t == "cd" and i + 1 < len(toks):
-                    example_root = Path.home() / "folderwise"
+                    example_root = (Path.home() / "folderwise").resolve()  # resolved like `target`, so a symlinked HOME works
                     target = Path(os.path.expanduser(toks[i + 1])).resolve()
                     if target == example_root or example_root in target.parents:
                         target = root / target.relative_to(example_root)
