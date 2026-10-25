@@ -25,6 +25,7 @@ CI_FILES = {
     '.github/scripts/install_check.py',
     '.github/scripts/release_build.py',
     '.github/scripts/test_ci_scripts.py',
+    '.github/scripts/test_public_docs.py',
     '.github/workflows/ci.yml',
     '.github/workflows/release.yml',
 }

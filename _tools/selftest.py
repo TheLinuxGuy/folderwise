@@ -19,7 +19,6 @@ import argparse
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -533,34 +532,6 @@ def s_layout():
     check("template CLAUDE.md imports AGENTS.md (keeps parent AGENTS.md out of project sessions)", tpl.is_file() and "@AGENTS.md" in tpl.read_text())
 
 
-def public_documentation() -> list[tuple[str, str]]:
-    """The landing README may link to a separate full command guide."""
-    root = SRC_TOOLS.parent
-    docs = [("README.md", (root / "README.md").read_text())]
-    guide = root / "docs" / "guide.md"
-    if guide.is_file():
-        if not re.search(r'\]\(docs/guide\.md(?:#[^)]*)?\)', docs[0][1]):
-            raise ValueError("README must link to docs/guide.md when the guide exists")
-        docs.append(("docs/guide.md", guide.read_text()))
-    return docs
-
-
-def s_docs_coverage():
-    """Every tool/setting must appear in public docs; root AGENTS.md lists the tools."""
-    readme = "\n".join(text for _, text in public_documentation())
-    agents = (SRC_TOOLS.parent / "AGENTS.md").read_text()
-    for f in sorted(SRC_TOOLS.glob("*.py")):
-        if f.stem in ("docslib", "docsextra"):
-            continue
-        check(f"public documentation covers {f.name}", f.name in readme)
-        check(f"root AGENTS.md lists {f.name}", f.name in agents)
-    keys = {"schema_version", "project", "description"}
-    for f in SRC_TOOLS.glob("*.py"):
-        keys |= set(re.findall(r'\bcfg(?:\.get\(|\[)"([a-z_]+)"', f.read_text()))
-    for k in sorted(keys):
-        check(f"public documentation covers the .docs.yaml setting '{k}'", f"`{k}`" in readme)
-
-
 def s_cli_errors():
     """Documented failure modes: bad arguments and wrong locations are refused with exit 2/1 and a clear message."""
     root_cwd = CTX["root"]  # contains no .docs.yaml, so there is no project here
@@ -688,8 +659,9 @@ def s_uv_cache():
 def s_framework_index():
     """Simulate normal adds and forced mistakes beside independent knowledge repos."""
     root = CTX["root"]
-    for name in (".gitignore", "README.md", "AGENTS.md", "uv.toml"):
+    for name in (".gitignore", "AGENTS.md", "uv.toml"):
         shutil.copy2(SRC_TOOLS.parent / name, root / name)
+    (root / "README.md").write_text("# Fictional framework fixture\n")
     sh(["git", "init", "-q", "-b", "main"], cwd=root)
     private = root / "a-new-personal-topic"
     private.mkdir()
@@ -780,75 +752,138 @@ def s_ci_allowlist():
     shutil.rmtree(sandbox, ignore_errors=True)
 
 
-def s_readme_commands():
-    """Every command in the root README's fenced blocks must be pasteable: real tool, real flags, no <placeholders>,
-    `cd` into this very folder, and in-page links that resolve."""
-    root = SRC_TOOLS.parent.resolve()
-    documents = public_documentation()
-    landing = documents[0][1]
-    readme = "\n".join(text for _, text in documents)
-    helps: dict[tuple, str] = {}
+def s_framework_checkout():
+    """Exercise the real setup/update CLI with local upstream and private repositories."""
+    base = CTX["root"] / "checkout-fixtures"
+    base.mkdir()
+    upstream = base / "upstream"
+    upstream.mkdir()
+    env = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 
-    def help_of(name, sub=None):
-        if (name, sub) not in helps:
-            rc, out = sh(["uv", "run", "--quiet", str(SRC_TOOLS / name), *([sub] if sub else []), "--help"], cwd=root)
-            helps[(name, sub)] = out
-        return helps[(name, sub)]
+    def run(root, *args):
+        return sh(list(args), cwd=root, env=env)
 
-    seen_flags, n_cmds = set(), 0
-    for block in re.findall(r"```(?:bash|sh|zsh)\n(.*?)```", readme, re.S):
-        for raw in block.splitlines():
-            if not raw.strip() or raw.lstrip().startswith("#"):
-                continue
-            try:
-                toks = shlex.split(raw, comments=True)
-            except ValueError as e:
-                check(f"README command parses: {raw[:60]}", False, str(e))
-                continue
-            for i, t in enumerate(toks):  # `cd <path>` must point into this folder
-                if t == "cd" and i + 1 < len(toks):
-                    example_root = (Path.home() / "folderwise").resolve()  # resolved like `target`, so a symlinked HOME works
-                    target = Path(os.path.expanduser(toks[i + 1])).resolve()
-                    if target == example_root or example_root in target.parents:
-                        target = root / target.relative_to(example_root)
-                    check(f"README cd path is inside Folderwise: {toks[i + 1][-45:]}", root == target or root in target.parents, str(target))
-            if "uv" not in toks or "run" not in toks:
-                continue
-            n_cmds += 1
-            args = toks[toks.index("run") + 1:]
-            name = Path(args[0]).name
-            check(f"README command has no <placeholders>: {name}", not re.search(r"<[^>]+>", raw), raw)
-            check(f"README names an existing tool: {name}", (SRC_TOOLS / name).is_file(), raw)
-            if not (SRC_TOOLS / name).is_file():
-                continue
-            rest = args[1:]
-            sub = rest[0] if name == "docs_mv.py" and rest and rest[0] in ("mv", "heading") else None
-            for flag in (t for t in rest if t.startswith("--")):
-                if (name, sub, flag) not in seen_flags:
-                    seen_flags.add((name, sub, flag))
-                    check(f"README example uses a real flag: {name}{' ' + sub if sub else ''} {flag}", flag in help_of(name, sub), raw)
-    sys.path.insert(0, str(SRC_TOOLS))
-    import new_project as np_  # noqa: E402
-    expected = np_.setup_prompt("homelab-inventory", "Inventory of home network hardware and software to allow for homelab v3 planning")
-    check("public documentation shows the exact setup prompt (no drift)", expected in readme, expected[:80])
-    check("public documentation retains the full command reference", n_cmds >= 10, f"{n_cmds} commands")
-    check("landing README has a getting-started section and shell example",
-          bool(re.search(r'^## (?:[^\w\s]+\s+)?(Getting started|Quick start)\s*$', landing, re.M))
-          and bool(re.search(r'```(?:bash|sh|zsh)\n', landing)))
-    sys.path.insert(0, str(SRC_TOOLS))
-    import docslib as dl  # noqa: E402
-    for name, text in documents:
-        anchors = dl.heading_anchors(text)
-        for a in sorted(set(re.findall(r"\]\(#([^)]+)\)", text))):
-            check(f"{name} in-page link resolves: #{a}", a in anchors)
+    def g(root, *args):
+        rc, out = run(root, "git", *args)
+        if rc:
+            raise RuntimeError(out)
+        return out.strip()
+
+    def put(root, rel, text="fictional fixture\n"):
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    g(upstream, "init", "-q", "-b", "main")
+    for name in (".gitignore", ".gitattributes", "AGENTS.md", "LICENSE", "uv.toml"):
+        shutil.copy2(SRC_TOOLS.parent / name, upstream / name)
+    put(upstream, "_tools/framework_checkout.py", (SRC_TOOLS / "framework_checkout.py").read_text())
+    for rel in ("README.md", "CONTRIBUTING.md", "docs/guide.md", "docs/assets/image.png", ".github/workflows/ci.yml", "ruff.toml", "_template/starter.md"):
+        put(upstream, rel)
+    g(upstream, "add", "-f", ".")
+    g(upstream, "commit", "-qm", "fictional upstream")
+    private = base / "private"
+    g(base, "clone", "-q", str(upstream), str(private))
+    topic = private / "my-topic"
+    topic.mkdir()
+    g(topic, "init", "-q", "-b", "main")
+    put(topic, "notes.md", "private sentinel\n")
+    g(topic, "add", ".")
+    g(topic, "commit", "-qm", "private sentinel")
+    topic_head = g(topic, "rev-parse", "HEAD")
+    cli = str(private / "_tools/framework_checkout.py")
+
+    def invoke(*args):
+        return run(private, sys.executable, cli, *args)
+
+    config = g(private, "config", "--local", "--list")
+    rc, out = invoke("--minimal", "--dry-run")
+    check("minimal preview changes neither files nor Git config", rc == 0 and (private / "docs/guide.md").is_file()
+          and config == g(private, "config", "--local", "--list"), out)
+    put(private, "AGENTS.md", "edited rules\n")
+    for args in (("--minimal",), ("--update",), ("--full",)):
+        rc, out = invoke(*args)
+        check(f"checkout {args[0]} refuses tracked edits", rc == 1 and "local changes" in out, out)
+    g(private, "add", "AGENTS.md")
+    rc, out = invoke("--minimal")
+    check("minimal refuses staged edits", rc == 1 and "local changes" in out, out)
+    g(private, "restore", "--staged", "--worktree", "AGENTS.md")
+    put(private, "docs/local.md", "keep this local file\n")
+    rc, out = invoke("--minimal")
+    check("minimal refuses untracked files in excluded framework folders", rc == 1 and "nothing was deleted" in out
+          and (private / "docs/local.md").read_text() == "keep this local file\n", out)
+    (private / "docs/local.md").unlink()
+    put(private, "docs/.env", "fictional ignored sentinel\n")
+    rc, out = invoke("--minimal")
+    check("minimal also preserves ignored files in excluded folders", rc == 1 and "nothing was deleted" in out, out)
+    (private / "docs/.env").unlink()
+    (private / ".git/MERGE_HEAD").write_text(g(private, "rev-parse", "HEAD") + "\n")
+    rc, out = invoke("--minimal")
+    check("minimal refuses an unfinished merge", rc == 1 and "current Git operation" in out, out)
+    (private / ".git/MERGE_HEAD").unlink()
+    rc, out = invoke("--minimal")
+    check("minimal setup succeeds", rc == 0, out)
+    check("minimal removes public directories and development root files", all(not (private / p).exists()
+          for p in ("docs", ".github", "README.md", "CONTRIBUTING.md", "ruff.toml")))
+    check("minimal keeps runtime folders and required root files", all((private / p).exists()
+          for p in ("_tools", "_template", ".gitignore", ".gitattributes", "AGENTS.md", "LICENSE", "uv.toml")))
+    check("minimal checkout has a clean tracked status", g(private, "status", "--porcelain", "--untracked-files=no") == "")
+    check("minimal configures pull-only hooks and push safeguards", g(private, "config", "folderwise.pullOnly") == "true"
+          and g(private, "config", "remote.origin.pushurl") == "no-push://folderwise-pull-only"
+          and g(private, "config", "core.hooksPath") == "_tools/framework-hooks"
+          and g(private, "config", "pull.ff") == "only")
+    rc, out = invoke("--minimal")
+    check("minimal setup is repeatable", rc == 0, out)
+
+    for rel in ("docs/new-guide.md", ".github/new-policy.md", "website/index.html", "_future/nested/file.md"):
+        put(upstream, rel)
+    g(upstream, "add", "-f", ".")
+    g(upstream, "commit", "-qm", "new framework paths")
+    rc, out = run(private, "git", "pull", "--ff-only")
+    check("direct git pull keeps excluded directories absent and includes future underscore folders", rc == 0
+          and all(not (private / p).exists() for p in ("docs", ".github", "website"))
+          and (private / "_future/nested/file.md").is_file(), out)
+    put(upstream, "_future/update.md")
+    g(upstream, "add", "-f", ".")
+    g(upstream, "commit", "-qm", "next update")
+    rc, out = invoke("--update", "--dry-run")
+    check("update preview does not fetch or advance HEAD", rc == 0
+          and not (private / "_future/update.md").exists(), out)
+    rc, out = invoke("--update")
+    check("update CLI pulls with the minimal layout", rc == 0 and (private / "_future/update.md").is_file()
+          and all(not (private / p).exists() for p in ("docs", ".github", "website")), out)
+    check("setup and both update methods preserve independent repository contents and history",
+          (topic / "notes.md").read_text() == "private sentinel\n" and g(topic, "rev-parse", "HEAD") == topic_head
+          and g(topic, "status", "--porcelain") == "")
+    rc, out = invoke("--full", "--dry-run")
+    check("full preview leaves the minimal layout in place", rc == 0 and not (private / "docs").exists(), out)
+    rc, out = invoke("--full")
+    check("full checkout can be restored without enabling pushes", rc == 0 and (private / "docs/guide.md").is_file()
+          and g(private, "config", "folderwise.pullOnly") == "true", out)
+
+    # Failure paths: archive/parent repository, missing origin, detached updater, invalid CLI.
+    archive = base / "archive"
+    put(archive, "_tools/framework_checkout.py", (SRC_TOOLS / "framework_checkout.py").read_text())
+    rc, out = run(archive, sys.executable, str(archive / "_tools/framework_checkout.py"), "--minimal")
+    check("checkout CLI refuses an archive or parent repository", rc == 1, out)
+    g(private, "remote", "remove", "origin")
+    rc, out = invoke("--minimal")
+    check("minimal requires an origin remote", rc == 1, out)
+    g(private, "remote", "add", "origin", str(upstream))
+    g(private, "checkout", "--detach", "-q")
+    rc, out = invoke("--update")
+    check("update refuses detached HEAD", rc == 1, out)
+    rc, out = invoke()
+    check("checkout CLI requires an explicit mode", rc == 2, out)
+    shutil.rmtree(base)
 
 
 SECTIONS = [
     ("create", s_create), ("new_doc", s_new_doc_and_index), ("stamp", s_stamp_and_hook), ("hook", s_hook_fail_closed),
     ("lint", s_lint_rules), ("timezone", s_timezone), ("links", s_links), ("toc", s_toc), ("mv", s_mv),
     ("tables", s_tables), ("stale", s_stale_index_recent), ("sync", s_sync),
-    ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache), ("docs_coverage", s_docs_coverage),
-    ("readme_commands", s_readme_commands), ("framework_index", s_framework_index), ("ci_allowlist", s_ci_allowlist),
+    ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache),
+    ("framework_checkout", s_framework_checkout), ("framework_index", s_framework_index), ("ci_allowlist", s_ci_allowlist),
 ]
 
 

@@ -169,6 +169,8 @@ jobs:
         env:
           EXPECT_PYTHON: ${{ matrix.python }}
         run: uv run --quiet .github/scripts/check_interpreter.py
+      - name: Public documentation checks (full checkout required)
+        run: uv run .github/scripts/test_public_docs.py
       - name: Complete self-test suite
         run: uv run _tools/selftest.py
 
@@ -257,6 +259,14 @@ jobs:
           test "$(git -C "$RUNNER_TEMP/fresh/folderwise" rev-parse HEAD)" = "$(git rev-parse HEAD)"
       - name: Documented setup and fictional-project workflow (README "Getting started" and the guide)
         run: python3 .github/scripts/install_check.py --framework "$RUNNER_TEMP/fresh/folderwise" --mode clone --expect-cold-cache
+
+      - name: Minimal checkout keeps installation checks independent of public docs
+        run: |
+          git clone --no-local --quiet "file://$GITHUB_WORKSPACE" "$RUNNER_TEMP/minimal-folderwise"
+          cd "$RUNNER_TEMP/minimal-folderwise"
+          python3 _tools/framework_checkout.py --minimal
+          test ! -e docs && test ! -e .github && test ! -e README.md
+          uv run _tools/selftest.py
 
   ci-gate:
     name: CI gate

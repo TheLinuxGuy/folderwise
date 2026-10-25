@@ -28,7 +28,7 @@ You solved it once. Keep the instructions, the evidence, and the decisions somew
 **[Folderwise 0.1.0](https://github.com/TheLinuxGuy/folderwise/releases/tag/v0.1.0): the first release.**
 
 - 📦 **Downloadable releases.** Zip and tar.gz archives with `SHA256SUMS`, built from one recorded commit and extracted and tested on Linux and macOS before they are offered. Cloning is still recommended; archives have no Git history.
-- ✅ **Tested on every change.** A 400+ check self-test runs on Linux (Python 3.10 and 3.15) and macOS (Python 3.15), with a clean-machine install check and 85% production line coverage required.
+- ✅ **Tested on every change.** 400+ tool and public-documentation checks run on Linux (Python 3.10 and 3.15) and macOS (Python 3.15), with a clean-machine install check and 85% production line coverage required.
 - 🛡️ **Guarded framework repository.** Only approved framework files can enter it; your knowledge projects, caches and credentials cannot.
 - 🔁 **Safe archive upgrades.** Step-by-step, no overwrite, no reset, and your projects are never touched: [upgrading an archive install](docs/framework-checkout.md#upgrading-an-archive-install).
 - 🪟 **Platforms.** Linux and macOS. Native Windows is not supported; use WSL.
@@ -59,6 +59,17 @@ Choose a topic, describe its purpose, and set its sensitivity. Folderwise create
 | Instructions | this page | [install from a release archive](docs/framework-checkout.md#install-from-a-release-archive) |
 
 Upgrades never touch your independent knowledge projects.
+
+**Want only the framework beside your own repositories?** After cloning into a new folder, preview and enable a [minimal pull-only checkout](docs/framework-checkout.md#minimal-pull-only-checkout):
+
+```sh
+cd ~/folderwise
+python3 _tools/framework_checkout.py --minimal --dry-run
+python3 _tools/framework_checkout.py --minimal
+```
+
+This keeps underscore-prefixed framework folders and essential root files, excluding public docs, images, the root README and CI files. Installation tests stay available in `_tools/selftest.py`. Ordinary `git pull --ff-only` preserves this layout; `python3 _tools/framework_checkout.py --update` enforces it before updating.
+
 
 > [!TIP]
 > You don't need to organize your whole life first. Pick one useful question—“How do I recover this service?”—and document the answer.

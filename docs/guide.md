@@ -2,6 +2,19 @@
 
 Commands, configuration, and troubleshooting. [Back to the project overview](../README.md).
 
+## Framework checkout setup
+
+`framework_checkout.py` configures an existing clone as a minimal pull-only installation. It keeps all tracked underscore-prefixed root folders and essential root files; public guides, images and CI files stay out of the working tree. It requires a clean tracked checkout and preserves independent topic repositories.
+
+```bash
+cd ~/folderwise && python3 _tools/framework_checkout.py --minimal --dry-run
+cd ~/folderwise && python3 _tools/framework_checkout.py --minimal
+cd ~/folderwise && python3 _tools/framework_checkout.py --update
+cd ~/folderwise && python3 _tools/framework_checkout.py --full
+```
+
+Ordinary `git pull --ff-only` also preserves the minimal layout. `--full` restores all tracked files while retaining pull-only safeguards. Read the [setup, safety checks and update details](framework-checkout.md#minimal-pull-only-checkout) before converting an existing clone.
+
 ## Quick start
 
 Every block below is complete: paste it into a terminal from any folder (they start with `cd`). Examples use the `homelab-inventory` project; swap in your project folder name. Use `--by human` when you run a tool yourself; agents use `--by <agent>/<model>`, for example `--by codex/gpt-5.5`.

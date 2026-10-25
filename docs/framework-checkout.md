@@ -36,6 +36,67 @@ git config remote.origin.pushurl no-push://folderwise-pull-only
 
 The push URL intentionally cannot be used. The pre-push hook also refuses pushes from a checkout marked pull-only. These are local safeguards; they aren't inherited by fresh clones and can be changed by their owner. They do not control Synology, iCloud, or another file synchronization service.
 
+## Minimal pull-only checkout
+
+Use this opt-in mode when the framework lives at the root of your knowledge folder and each topic below it is an independent repository. It requires Git 2.25+ and Python 3.10+. Start with a normal clone into a **new directory**, then configure it locally:
+
+```sh
+git clone https://github.com/TheLinuxGuy/folderwise.git ~/folderwise
+cd ~/folderwise
+python3 _tools/framework_checkout.py --minimal --dry-run
+python3 _tools/framework_checkout.py --minimal
+uv run _tools/selftest.py
+```
+
+For an existing clone, run the last four commands from its root instead. The preview performs the same safety checks but makes no changes. Do not clone over existing knowledge files; see the nonempty-folder migration below.
+
+The setup uses Git's persistent non-cone sparse checkout with this allowlist:
+
+```text
+/_*/
+/.gitignore
+/.gitattributes
+/AGENTS.md
+/LICENSE
+/uv.toml
+```
+
+Only tracked **top-level** directories whose names begin with `_` are materialized, including future underscore-prefixed directories. Their entire contents remain available, including `_template/docs/` and the tool self-tests. Root `.gitignore` protects independent topic repositories, `.gitattributes` preserves line-ending rules, `AGENTS.md` holds framework instructions, and `uv.toml` supplies portable defaults. Git's own `.git` metadata remains. Public `docs/` (including images), `.github/`, `README.md`, `CONTRIBUTING.md`, and development-only root settings disappear from disk without staging deletions. Read the public guides on GitHub or in your separate development clone.
+
+The script requires a clean tracked working tree and no unfinished merge/rebase/cherry-pick/revert. It refuses excluded framework directories containing untracked or ignored files: move those files elsewhere, then retry. It never runs `git clean` or `git reset`, never deletes local knowledge projects, and does not move their contents. A Git failure stops the script and may leave already-applied local settings in place; review its output before retrying.
+
+Minimal setup also applies the pull-only safeguards listed above, including the blocked origin push URL and framework hooks. These settings apply to this clone; they do not change the public repository. Use a separate full development clone for contributions. The script requires an `origin` remote; `--update` also requires an attached branch with an upstream.
+
+### Updating a minimal checkout
+
+After setup, normal Git updates preserve the sparse rules:
+
+```sh
+git pull --ff-only
+uv run _tools/selftest.py
+```
+
+Or enforce the minimal configuration before pulling and reapply it afterward:
+
+```sh
+python3 _tools/framework_checkout.py --update --dry-run
+python3 _tools/framework_checkout.py --update
+uv run _tools/selftest.py
+```
+
+An existing personal update script can call `python3 _tools/framework_checkout.py --update` from the framework root instead of calling `git pull` directly. No extra root script or non-underscore directory is installed. Neither update method updates independent project repositories or applies managed template changes. Preview those separately with `uv run _tools/sync_rules.py --check`.
+
+Sparse checkout controls working-tree contents, not downloads: Git still fetches repository history, and pull summaries can mention excluded files. Local files left in excluded directories are preserved and reported rather than deleted automatically. The promise concerns tracked framework directories; pre-existing knowledge folders remain untouched.
+
+### Restoring the full checkout
+
+```sh
+python3 _tools/framework_checkout.py --full --dry-run
+python3 _tools/framework_checkout.py --full
+```
+
+This restores tracked documentation and CI files. Pull-only safeguards remain enabled; use your development clone to publish. Release archives have no Git metadata and cannot use this script until they are set up as a real clone. Default full clones and release archive contents are unchanged.
+
 ## Adding the framework to a nonempty documentation folder
 
 Do not clone directly over existing files or run a destructive reset/clean. First back up the framework files, confirm existing topic repositories are independent, and compare any existing root files with the incoming release. Initialize/fetch the framework repository and reconcile only the named public paths. A migration should verify hashes of knowledge files before and after, and test that an arbitrary new topic folder is ignored.

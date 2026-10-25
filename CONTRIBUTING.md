@@ -2,7 +2,7 @@
 
 Folderwise combines shared conventions, templates, and CLI tools for knowledge humans read and agents help maintain. Improvements should keep that workflow understandable and portable.
 
-Read `AGENTS.md` before changing the framework. Run `uv run _tools/selftest.py` before and after edits. A changed CLI, setting, or behavior needs a meaningful self-test and corresponding README update. Targeted sections can be run with `-k`, but the complete suite must pass before submitting.
+Read `AGENTS.md` before changing the framework. Run `uv run _tools/selftest.py` before and after edits. A changed CLI, setting, or behavior needs a meaningful self-test and corresponding README update. Public documentation checks run separately with `uv run .github/scripts/test_public_docs.py` in a full development clone; missing guides fail that check. Installation tests must also pass without a root README or public `docs/` directory. Targeted sections can be run with `-k`, but the complete suite must pass before submitting.
 
 Use fictional examples. Never include real personal documents, balances, account identifiers, claim records, credentials, machine-specific paths, or your local vault configuration. Keep topic repositories outside the framework Git index. Run `python3 _tools/framework_guard.py` after staging to verify that index.
 
@@ -16,9 +16,9 @@ CI (`.github/workflows/ci.yml`) runs on every PR, on pushes to `main`, and on ma
 
 | Check | What it proves |
 |---|---|
-| `Self-test (linux-py3.10)`, `(linux-py3.15)`, `(macos-py3.15)` | the complete `selftest.py` suite on each platform, with the job's interpreter reaching every `uv` child process |
+| `Self-test (linux-py3.10)`, `(linux-py3.15)`, `(macos-py3.15)` | the installation `selftest.py` suite and separate public-documentation checks on each platform, with the job's interpreter reaching every `uv` child process |
 | `Coverage gate` | the suite under coverage; at least 85% production line coverage; Codecov upload |
-| `Clean install (linux-py3.10)`, `(macos-py3.15)` | the documented clone-and-uv setup on a runner with an empty uv cache, then a fictional project through creation, stamping, lint, hook commit and hook rejection |
+| `Clean install (linux-py3.10)`, `(macos-py3.15)` | both full and minimal clone installation tests on a runner with an empty uv cache, then a fictional project through creation, stamping, lint, hook commit and hook rejection |
 | `Framework index guard` | only approved framework paths are tracked |
 | `Ruff` | definite errors only (`ruff.toml`: syntax errors, undefined names, unused imports and variables); no formatting rules |
 | `Workflow validation` | actionlint and zizmor on the workflow files |
@@ -33,6 +33,7 @@ Changes to workflows, `.github/scripts/`, `.coveragerc`, `codecov.yml`, `ruff.to
 
 ```bash
 uv run _tools/selftest.py
+uv run .github/scripts/test_public_docs.py
 uv run .github/scripts/ci_coverage.py
 uvx ruff@0.17.2 check --config ruff.toml .
 python3 _tools/framework_guard.py
