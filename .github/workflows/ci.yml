@@ -73,6 +73,7 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
           sensitive=$(git diff --name-only "$BASE_SHA" HEAD | grep -E '^(\.github/|\.coveragerc$|codecov\.yml$|ruff\.toml$|\.gitignore$|_tools/framework_guard\.py$|_tools/framework-hooks/|_tools/selftest\.py$)' || true)
+          # shellcheck disable=SC2016  # the backticks are literal Markdown
           if [ -n "$sensitive" ]; then
             echo "::warning title=Review carefully::This PR changes CI, coverage policy, the framework guard or the self-test harness."
             {
