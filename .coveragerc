@@ -19,11 +19,13 @@ omit =
     _tools/__pycache__/*
 
 [paths]
-# First entry is canonical. Self-test copies live in docs-selftest-* temporary folders.
+# First entry is canonical. Self-test copies live in docs-selftest-* temporary folders (including
+# copies of the tools placed in scratch sub-folders by the self-test, such as the guard sandbox).
 source =
     _tools/
     */docs-selftest-*/_tools/
     **/docs-selftest-*/_tools/
+    **/docs-selftest-*/**/_tools/
 
 [report]
 precision = 2

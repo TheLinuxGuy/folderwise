@@ -358,7 +358,8 @@ class CoverageEvidenceTests(unittest.TestCase):
         self.assertIn("parallel = True", text)
         self.assertIn("branch = True", text)
         self.assertIn("/repo/_tools/*", text)
-        self.assertIn("*/docs-selftest-*/_tools/*", text)
+        self.assertIn("**/docs-selftest-*/_tools/*", text)
+        self.assertIn("**/docs-selftest-*/**/_tools/*", text)
         self.assertIn("*/selftest.py", text)
 
     def test_threshold_is_the_agreed_policy(self):

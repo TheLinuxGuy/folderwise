@@ -52,7 +52,7 @@ def runtime_config(data_dir: Path, root: Path) -> str:
     return (
         "[run]\nbranch = True\nparallel = True\n"
         f"data_file = {data_dir / '.coverage'}\n"
-        f"include =\n{include}\n    */docs-selftest-*/_tools/*\n"
+        f"include =\n{include}\n    **/docs-selftest-*/_tools/*\n    **/docs-selftest-*/**/_tools/*\n"
         "omit =\n    */selftest.py\n    */__pycache__/*\n"
         "disable_warnings = no-data-collected\n"
     )
