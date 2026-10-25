@@ -7,9 +7,32 @@
 !/LICENSE
 !/CONTRIBUTING.md
 !/uv.toml
+!/.coveragerc
+!/codecov.yml
+!/ruff.toml
 !/_tools/
 !/_template/
 !/docs/
+
+# CI and release configuration: exact files only. Anything else under .github/ stays ignored.
+# Keep this list identical to CI_FILES in _tools/framework_guard.py (selftest.py -k framework_index checks it).
+!/.github/
+/.github/*
+!/.github/CODEOWNERS
+!/.github/dependabot.yml
+!/.github/pull_request_template.md
+!/.github/release-manifest.txt
+!/.github/scripts/
+/.github/scripts/*
+!/.github/scripts/check_interpreter.py
+!/.github/scripts/ci_coverage.py
+!/.github/scripts/install_check.py
+!/.github/scripts/release_build.py
+!/.github/scripts/test_ci_scripts.py
+!/.github/workflows/
+/.github/workflows/*
+!/.github/workflows/ci.yml
+!/.github/workflows/release.yml
 
 # Transient and local files, even inside allowed framework directories.
 **/__pycache__/
@@ -17,3 +40,9 @@
 .DS_Store
 .env
 .env.*
+.coverage
+.coverage.*
+coverage.xml
+.ci-coverage/
+htmlcov/
+.ruff_cache/

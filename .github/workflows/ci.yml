@@ -1,0 +1,279 @@
+name: CI
+
+# Pull requests (including forks) run with the read-only token and no secrets; pushes to main establish the
+# Codecov baseline. There are deliberately no path filters: documentation-only PRs run every check so the
+# required checks always report. Changes to this file, .coveragerc, codecov.yml and the framework guard
+# need careful review (see CODEOWNERS and CONTRIBUTING.md): PR CI cannot stop a PR from editing its own CI.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to validate (used by Prepare release)
+        type: string
+        required: false
+        default: ""
+      release-validation:
+        description: Skip the Codecov upload (used by Prepare release)
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}  # supersede PR runs only; keep every main run
+
+env:
+  UV_VERSION: "0.13.5"
+  UV_PYTHON_DOWNLOADS: never  # use only the interpreter this job selected; never fetch another one silently
+  UV_NO_PROGRESS: "1"
+
+jobs:
+  lint:
+    name: Ruff
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - name: Ruff (syntax errors, undefined names, unused imports and variables)
+        run: uvx ruff@0.17.2 check --no-cache --config ruff.toml .
+
+  guard:
+    name: Framework index guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.10"
+      - name: Guard the tracked index (only approved framework paths)
+        run: python3 _tools/framework_guard.py
+      - name: Flag changes that define what CI enforces
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          sensitive=$(git diff --name-only "$BASE_SHA" HEAD | grep -E '^(\.github/|\.coveragerc$|codecov\.yml$|ruff\.toml$|\.gitignore$|_tools/framework_guard\.py$|_tools/framework-hooks/|_tools/selftest\.py$)' || true)
+          if [ -n "$sensitive" ]; then
+            echo "::warning title=Review carefully::This PR changes CI, coverage policy, the framework guard or the self-test harness."
+            {
+              echo "### Review these files carefully"
+              echo "They decide what CI enforces and what may enter the public index. CI cannot protect itself from a PR that edits it."
+              echo
+              echo "$sensitive" | sed 's/^/- `/; s/$/`/'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  workflows:
+    name: Workflow validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - name: actionlint (pinned release, checksum verified)
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl -fsSL -o "$archive" "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color
+      - name: "zizmor (workflow security: pinning, permissions, injection, credentials)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uvx zizmor@1.31.1 --min-severity medium --no-progress .github/workflows
+
+  scripts:
+    name: CI script tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        id: python
+        with:
+          python-version: "3.15"
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - name: Select the interpreter for uv
+        env:
+          PYTHON_PATH: ${{ steps.python.outputs.python-path }}
+        run: echo "UV_PYTHON=$PYTHON_PATH" >> "$GITHUB_ENV"
+      - name: Test the packaging, coverage and workflow-policy scripts
+        run: uv run --no-project --with coverage==7.16.2 --with pyyaml==6.0.3 python -m unittest discover -s .github/scripts -v
+
+  selftest:
+    name: Self-test (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: linux-py3.10, os: ubuntu-latest, python: "3.10"}
+          - {label: linux-py3.15, os: ubuntu-latest, python: "3.15"}
+          - {label: macos-py3.15, os: macos-latest, python: "3.15"}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        id: python
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - name: Select the interpreter for uv (inherited by every uv child process)
+        env:
+          PYTHON_PATH: ${{ steps.python.outputs.python-path }}
+        run: echo "UV_PYTHON=$PYTHON_PATH" >> "$GITHUB_ENV"
+      - name: Confirm uv child processes run Python ${{ matrix.python }}
+        env:
+          EXPECT_PYTHON: ${{ matrix.python }}
+        run: uv run --quiet .github/scripts/check_interpreter.py
+      - name: Complete self-test suite
+        run: uv run _tools/selftest.py
+
+  coverage:
+    name: Coverage gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        id: python
+        with:
+          python-version: "3.15"
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - name: Select the interpreter for uv (inherited by every uv child process)
+        env:
+          PYTHON_PATH: ${{ steps.python.outputs.python-path }}
+        run: echo "UV_PYTHON=$PYTHON_PATH" >> "$GITHUB_ENV"
+      - name: Confirm uv child processes run Python 3.15
+        env:
+          EXPECT_PYTHON: "3.15"
+        run: uv run --quiet .github/scripts/check_interpreter.py
+      - name: Self-test under coverage, then enforce 85% overall line coverage
+        run: uv run .github/scripts/ci_coverage.py
+      - name: Keep the reports briefly
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-coverage/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+      - name: Upload line coverage to Codecov
+        if: ${{ !cancelled() && !inputs.release-validation }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          # Empty for fork PRs: those use Codecov's tokenless upload. Never use pull_request_target here.
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: .ci-coverage/coverage.xml
+          disable_search: true
+          flags: selftest
+          name: linux-py3.15
+          verbose: true
+          fail_ci_if_error: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+
+  install:
+    name: Clean install (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: linux-py3.10, os: ubuntu-latest, python: "3.10"}
+          - {label: macos-py3.15, os: macos-latest, python: "3.15"}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        id: python
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - name: Select the interpreter and an empty uv cache
+        env:
+          PYTHON_PATH: ${{ steps.python.outputs.python-path }}
+        run: |
+          echo "UV_PYTHON=$PYTHON_PATH" >> "$GITHUB_ENV"
+          echo "UV_CACHE_DIR=$RUNNER_TEMP/uv-cache-clean" >> "$GITHUB_ENV"
+      - name: Fresh clone of the commit under test
+        run: |
+          mkdir -p "$RUNNER_TEMP/fresh"
+          git clone --no-local --quiet "file://$GITHUB_WORKSPACE" "$RUNNER_TEMP/fresh/folderwise"
+          test "$(git -C "$RUNNER_TEMP/fresh/folderwise" rev-parse HEAD)" = "$(git rev-parse HEAD)"
+      - name: Documented setup and fictional-project workflow (README "Install")
+        run: python3 .github/scripts/install_check.py --framework "$RUNNER_TEMP/fresh/folderwise" --mode clone --expect-cold-cache
+
+  ci-gate:
+    name: CI gate
+    if: ${{ always() }}
+    needs: [lint, guard, workflows, scripts, selftest, coverage, install]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to have succeeded (failed, cancelled and skipped all fail)
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          print(json.dumps({job: info["result"] for job, info in needs.items()}, indent=2))
+          bad = {job: info["result"] for job, info in needs.items() if info["result"] != "success"}
+          if bad or not needs:
+              sys.exit(f"CI gate: not every required job succeeded: {bad or 'no jobs reported'}")
+          print("CI gate: all required jobs succeeded")
+          PY

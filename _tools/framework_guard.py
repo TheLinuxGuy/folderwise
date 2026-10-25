@@ -9,23 +9,43 @@ import subprocess
 import sys
 
 FILES = {'.gitignore', '.gitattributes', 'README.md', 'AGENTS.md',
-         'LICENSE', 'CONTRIBUTING.md', 'uv.toml'}
+         'LICENSE', 'CONTRIBUTING.md', 'uv.toml',
+         '.coveragerc', 'codecov.yml', 'ruff.toml'}
 DIRECTORIES = {'_tools', '_template', 'docs'}
+# CI and release configuration is allowed by exact path only; .github/ is not an allowed directory,
+# so any other file there is rejected. Keep in sync with the .github allowlist in .gitignore
+# (the self-test checks both).
+CI_FILES = {
+    '.github/CODEOWNERS',
+    '.github/dependabot.yml',
+    '.github/pull_request_template.md',
+    '.github/release-manifest.txt',
+    '.github/scripts/check_interpreter.py',
+    '.github/scripts/ci_coverage.py',
+    '.github/scripts/install_check.py',
+    '.github/scripts/release_build.py',
+    '.github/scripts/test_ci_scripts.py',
+    '.github/workflows/ci.yml',
+    '.github/workflows/release.yml',
+}
+LOCAL_DIRS = {'.git', '.cache', '__pycache__', '.obsidian', 'node_modules', '.ruff_cache', '.ci-coverage', 'htmlcov'}
 
 
 def validate_entry(mode, path):
     parts = PurePosixPath(path).parts
-    if not parts or (parts[0] not in DIRECTORIES and path not in FILES):
+    if not parts or (parts[0] not in DIRECTORIES and path not in FILES and path not in CI_FILES):
         return 'not an approved framework path'
     if mode not in {'100644', '100755'}:
         return 'only regular framework files are allowed (no symlinks or nested repositories)'
     if len(parts) == 1:
         return None
-    if any(p in {'.git', '.cache', '__pycache__', '.obsidian', 'node_modules'} for p in parts):
+    if any(p in LOCAL_DIRS for p in parts):
         return 'repository metadata, caches, and vault configuration stay local'
     name = parts[-1]
     if name == '.docs.yaml' and path != '_template/.docs.yaml':
         return 'knowledge-project configuration does not belong in the framework'
+    if name == '.coverage' or name.startswith('.coverage.') or name == 'coverage.xml':
+        return 'coverage data and reports are generated locally'
     if (name == '.env' or name.startswith('.env.') or
             name.endswith(('.pem', '.key', '.p12', '.pfx', '.pyc', '.pyo')) or
             name in {'id_rsa', 'id_ed25519', 'credentials.json', 'settings.local.json'}):

@@ -1,0 +1,34 @@
+# Coverage policy for Folderwise production Python (the CLI tools in _tools/).
+#
+# This file is read when combining and reporting. Measurement is configured by a
+# generated file written by .github/scripts/ci_coverage.py, because the self-test runs
+# copies of the tools from temporary directories in uv subprocesses and Git hooks.
+# Run `uv run .github/scripts/ci_coverage.py` from the repository root (see CONTRIBUTING.md).
+#
+# Scope: every .py file under _tools/ except the self-test harness. Files that no test
+# executes are still reported (as 0%). Third-party code is never under _tools/.
+# Do not widen `omit` or add `exclude_also` to raise the number; a reviewer must approve
+# any change to this file.
+
+[run]
+branch = True
+relative_files = True
+source_dirs = _tools
+omit =
+    _tools/selftest.py
+    _tools/__pycache__/*
+
+[paths]
+# First entry is canonical. Self-test copies live in docs-selftest-* temporary folders.
+source =
+    _tools/
+    */docs-selftest-*/_tools/
+    **/docs-selftest-*/_tools/
+
+[report]
+precision = 2
+show_missing = True
+skip_empty = True
+
+[xml]
+output = .ci-coverage/coverage.xml

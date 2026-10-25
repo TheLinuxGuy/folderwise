@@ -22,6 +22,7 @@ The root `.gitignore` is an allowlist. Never add knowledge projects, caches, cre
   - `selftest.py` — automated self-test of all the tools in an isolated temp copy (about 15 seconds)
 - `uv.toml` — portable uv defaults; no machine-specific paths. Optional `UV_CACHE_DIR` is local to the environment, not committed.
 - `_tools/framework_guard.py` — validates the public framework index; `_tools/framework-hooks/` contains root hooks.
+- `.github/` — CI (`workflows/ci.yml`), manual draft-release preparation (`workflows/release.yml`), their helper scripts and tests (`scripts/`), and `release-manifest.txt`. Root `.coveragerc`, `codecov.yml` and `ruff.toml` hold coverage, Codecov and lint policy. These are allowed by **exact path** in both `.gitignore` and `framework_guard.py` (`CI_FILES`); adding one means editing both, and `selftest.py -k ci_allowlist` verifies they agree.
 - `docs/` — public framework guides, including Obsidian/iCloud and framework-only deployments.
 - `<project>/` — a project repo. Work inside it; follow its `AGENTS.md`.
 
@@ -34,7 +35,8 @@ The root `.gitignore` is an allowlist. Never add knowledge projects, caches, cre
 
 ## Changing the tools or template (verification required)
 - Before editing anything in `_tools/` or `_template/`, make sure no other session is editing them (one writer at a time). Snapshot shared inputs and check for concurrent changes before deploying a release.
-- Run `uv run _tools/selftest.py` before you start (to know the baseline) and again when you finish. It must report all checks passed. Use `-k <section>` while iterating (sections: create, new_doc, stamp, hook, lint, timezone, links, toc, mv, tables, stale, sync, doctor, layout, uv_cache, docs_coverage, readme_commands).
+- Run `uv run _tools/selftest.py` before you start (to know the baseline) and again when you finish. It must report all checks passed. Use `-k <section>` while iterating (sections: create, new_doc, stamp, hook, lint, timezone, links, toc, mv, tables, stale, sync, doctor, layout, cli_errors, failure_paths, uv_cache, docs_coverage, readme_commands, framework_index, ci_allowlist).
 - Every new tool, setting or behaviour gets a check in `_tools/selftest.py` and an entry in the public documentation: keep README.md concise and place detailed commands/configuration in docs/guide.md (the `docs_coverage` section checks both and fails if a tool or `.docs.yaml` setting is undocumented) in the same change. A tool change without a passing self-test is not done.
 - When managed template rules change, sync them into affected projects only with the owner's authorization, then validate and commit in each independent project repository. Publishing the framework alone does not authorize modifying knowledge projects.
 - The pre-commit hook fails closed: if a project cannot find `../_tools` or `uv`, its commits are blocked (`DOCS_SKIP_HOOK=1` bypasses once, only when the user says so).
+- CI enforces the same suite plus coverage: at least 85% production line coverage (`uv run .github/scripts/ci_coverage.py`) and at least 90% of changed lines (Codecov `codecov/patch`). Cover new behavior with real CLI/hook tests, not artificial ones; never lower a threshold, widen an omit, or add `pragma: no cover` to pass. Changes to workflows, `.github/scripts/`, `.coveragerc`, `codecov.yml`, `ruff.toml`, `.gitignore` or `framework_guard.py` need explicit mention in the PR and careful review. Releases are prepared only by the manual **Prepare release** workflow (`docs/maintainers.md`); never publish one or create tags yourself.
