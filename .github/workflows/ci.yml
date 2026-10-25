@@ -254,7 +254,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/fresh"
           git clone --no-local --quiet "file://$GITHUB_WORKSPACE" "$RUNNER_TEMP/fresh/folderwise"
           test "$(git -C "$RUNNER_TEMP/fresh/folderwise" rev-parse HEAD)" = "$(git rev-parse HEAD)"
-      - name: Documented setup and fictional-project workflow (README "Install")
+      - name: Documented setup and fictional-project workflow (README "Getting started" and the guide)
         run: python3 .github/scripts/install_check.py --framework "$RUNNER_TEMP/fresh/folderwise" --mode clone --expect-cold-cache
 
   ci-gate:

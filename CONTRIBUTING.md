@@ -18,7 +18,7 @@ CI (`.github/workflows/ci.yml`) runs on every PR, on pushes to `main`, and on ma
 |---|---|
 | `Self-test (linux-py3.10)`, `(linux-py3.15)`, `(macos-py3.15)` | the complete `selftest.py` suite on each platform, with the job's interpreter reaching every `uv` child process |
 | `Coverage gate` | the suite under coverage; at least 85% production line coverage; Codecov upload |
-| `Clean install (linux-py3.10)`, `(macos-py3.15)` | the README clone-and-uv setup on a runner with an empty uv cache, then a fictional project through creation, stamping, lint, hook commit and hook rejection |
+| `Clean install (linux-py3.10)`, `(macos-py3.15)` | the documented clone-and-uv setup on a runner with an empty uv cache, then a fictional project through creation, stamping, lint, hook commit and hook rejection |
 | `Framework index guard` | only approved framework paths are tracked |
 | `Ruff` | definite errors only (`ruff.toml`: syntax errors, undefined names, unused imports and variables); no formatting rules |
 | `Workflow validation` | actionlint and zizmor on the workflow files |

@@ -102,7 +102,7 @@ def main() -> int:
                 check("RELEASE-INFO commit is the selected commit", info.get("commit") == args.expect_commit, str(info))
 
         rc, out = run(["uv", "run", "_tools/selftest.py"], fw, env)
-        check("README step: uv run _tools/selftest.py passes", rc == 0 and "checks passed" in out and "FAILED" not in out, out)
+        check("guide step: uv run _tools/selftest.py passes", rc == 0 and "checks passed" in out and "FAILED" not in out, out)
         if args.expect_cold_cache:
             cache, cold = uv_cache_state(fw, env)
             check("uv resolved dependencies into the cache during installation", not cold)
