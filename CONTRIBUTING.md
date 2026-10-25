@@ -53,7 +53,7 @@ Select an interpreter the way CI does with `UV_PYTHON=3.10 uv run _tools/selftes
 ## Codecov
 
 - Install the Codecov GitHub app for the repository and add its upload token as the Actions secret `CODECOV_TOKEN` (and as a Dependabot secret, so Dependabot PRs also report). Pushes to `main` use the token to establish the baseline.
-- **Fork PRs** run with no secrets. `codecov-action` v4+ prefixes the fork branch name, which lets Codecov accept a tokenless upload for a public repository; uploads from fork PRs are therefore not required to succeed in the job itself, while the required `codecov/patch` status still has to appear. Never switch this workflow to `pull_request_target` to get a token.
+- **Fork PRs** run with no secrets. `codecov-action` v4+ prefixes the fork branch name, which lets Codecov accept a tokenless upload for a public repository; the job does not fail if a fork's upload is rejected, but the required `codecov/patch` status still has to appear (maintainers: confirm this on the first fork PR before relying on it; see docs/maintainers.md). Never switch this workflow to `pull_request_target` to get a token.
 - `codecov.yml`: `codecov/patch` target 90%; `codecov/project` is informational (the overall gate lives in Actions).
 - Artifacts are kept 3 days (coverage report) or 7 days (release assets in a draft preparation), and Actions minutes and storage are free for public repositories on standard hosted runners, so the expected recurring cost is $0.
 
