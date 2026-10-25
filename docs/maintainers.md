@@ -96,6 +96,7 @@ Archives contain `RELEASE-INFO.json` (version, tag, source commit, commit date).
 
 - **Before publishing:** delete the draft (and re-run **Prepare release**) or edit its notes. Nothing is public.
 - **After publishing:** do not try to replace assets. Fix the problem on `main`, then prepare a new version (for example `1.2.4`) and say in its upgrade notes that it supersedes the bad one. A bad published release can be marked as a pre-release or its notes edited to warn users; its tag and assets stay.
+- **A run that fails in "Verify the draft"** may still have created a correct draft (the create step runs first). Open Releases, find the draft (it shows as untagged until published), and check it by hand: draft flag, pre-release flag, target commit, exactly three uploaded assets, and the `SHA256SUMS` contents. If it is right you can use it; to re-run the workflow for the same version, delete that draft first, because the workflow refuses a version that already has a release.
 - **A failed run** leaves no release behind unless it got as far as the draft. Look for stale drafts under Releases before re-running; a stale draft for the same version makes the workflow refuse.
 
 ### What a release does not do
