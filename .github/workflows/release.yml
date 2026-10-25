@@ -247,12 +247,26 @@ jobs:
           PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
         run: |
           set -euo pipefail
-          release=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\")")
+          # The release list can lag the creation by a few seconds; retry, and fail with a message (not a bare jq exit 4).
+          release=""
+          for attempt in 1 2 3 4 5 6; do
+            release=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\")")
+            if [ -n "$release" ]; then break; fi
+            echo "Draft for $TAG not listed yet (attempt $attempt); waiting"
+            sleep 10
+          done
+          if [ -z "$release" ]; then
+            echo "::error::The draft release for $TAG was not found after creation. Look under Releases for an untagged draft before re-running."
+            exit 1
+          fi
           echo "$release" | jq '{html_url, draft, prerelease, target_commitish, assets: [.assets[] | {name, size, state}]}'
           echo "$release" | jq -e --arg c "$COMMIT" --arg v "$VERSION" --argjson pre "$PRERELEASE" '
             .draft == true and .prerelease == $pre and .target_commitish == $c
             and ([.assets[].name] | sort) == (["folderwise-\($v).tar.gz", "folderwise-\($v).zip", "SHA256SUMS"] | sort)
-            and all(.assets[]; .state == "uploaded")' >/dev/null
+            and all(.assets[]; .state == "uploaded")' >/dev/null || {
+            echo "::error::The draft for $TAG does not match the expected state (draft, pre-release flag, target commit, exactly three uploaded assets). See the JSON above."
+            exit 1
+          }
           {
             echo "### Draft release ready (not published)"
             echo "- $(echo "$release" | jq -r .html_url)"
