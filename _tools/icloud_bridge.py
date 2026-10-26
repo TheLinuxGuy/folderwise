@@ -36,7 +36,8 @@ TOOLS = Path(__file__).resolve().parent
 LABEL = "org.folderwise.ibridge"
 LAUNCHER_NAME = "folderwise-ibridgesync"
 LAUNCHER_BODY = b'#!/bin/sh\n# Folderwise iCloud bridge launch entry point.\nexec "$@"\n'
-REPORT, DASHBOARD, TASK_DIR = "Bridge Status.md", "Tasks.md", "_Folderwise Tasks"
+LEGACY_REPORT = "Bridge Status.md"
+REPORT, DASHBOARD, TASK_DIR = "_folderwise-sync-status.md", "Tasks.md", "_Folderwise Tasks"
 IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif", ".heic", ".bmp"}
 SKIP = {"AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", "_doc-template.md", "node_modules", "__pycache__", "#recycle", "credentials.json", "id_rsa", "id_ed25519"}
 CHECKBOX = re.compile(r"^(\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\].*)$")
@@ -518,7 +519,7 @@ def remove_notifier(home):
 
 def report(files, omissions, issues, settings, managed_bytes):
     image_bytes = sum(content_size(data) for key, data in files.items() if Path(key).suffix.lower() in IMAGES)
-    rows = ["# Bridge Status", "", f"Mode: **{settings['mode']}**. Interval: **{settings['interval_minutes']} minutes**.",
+    rows = ["# Folderwise sync status", "", f"Mode: **{settings['mode']}**. Interval: **{settings['interval_minutes']} minutes**.",
             f"Estimated managed export: **{sum(content_size(data) for data in files.values()):,} bytes**, including **{image_bytes:,} image bytes**.",
             f"Currently present managed payload: **{managed_bytes:,} bytes** (excludes status/settings and unowned files).",
             "This is a file-size estimate, not your iCloud account usage or bill.",
@@ -667,21 +668,32 @@ def sync(settings, home, dry=False):
                 managed_bytes += p.stat().st_size
         except ValueError:
             pass  # already reported above; never follow a conflicting symlink to count it
+    previous_report = read_json(home / 'report.json', {})
+    legacy = safe(vault, LEGACY_REPORT)
+    legacy_before = existing_hash(legacy)
+    legacy_owned = (legacy_before is not None and previous_report.get('path', LEGACY_REPORT) == LEGACY_REPORT
+                    and legacy_before == previous_report.get('hash'))
+    if legacy_before is not None and not legacy_owned:
+        issues.append(f'{LEGACY_REPORT}: legacy report has unowned edits; preserved. Move it outside the vault after review.')
     status = report(files, omissions, issues, settings, managed_bytes)
     target = safe(vault, REPORT)
-    previous_report = read_json(home / 'report.json', {})
-    if target.exists() and content_hash(target) not in {previous_report.get('hash'), digest(status)}:
-        raise ValueError('Bridge Status.md has unowned edits; preserve/rename it before retrying')
+    owned_hash = previous_report.get('hash') if previous_report.get('path') == REPORT else None
+    if target.exists() and content_hash(target) not in {owned_hash, digest(status)}:
+        raise ValueError(f'{REPORT} has unowned edits; preserve/rename it before retrying')
     if not target.exists() or target.read_bytes() != status:
         atomic(target, status)
-    save(home / 'report.json', {'hash': digest(status)})
+    if legacy_owned:
+        if existing_hash(legacy) != legacy_before:
+            raise ValueError(f'{LEGACY_REPORT}: changed during migration; preserved')
+        legacy.unlink()
+    save(home / 'report.json', {'path': REPORT, 'hash': digest(status)})
     last = {'issues': issues, 'omitted_files': len(omissions), 'selected_bytes': total, 'managed_bytes': managed_bytes,
             'last_run': dl.now({'timezone': 'UTC'}).isoformat(), 'last_run_epoch': time.time(), 'ok': not issues}
     previous = read_json(home / 'last-run.json', {})
     actionable = [item for item in omissions if item['reason'] != 'excluded by lean mode']
     signature = digest(json.dumps([issues, actionable], sort_keys=True).encode())
     if settings['notifications'] == 'errors' and (issues or actionable) and previous.get('issue_signature') != signature:
-        last['notification_sent'] = notify('Folderwise bridge needs attention. See Bridge Status.md in your vault.', home)
+        last['notification_sent'] = notify('Folderwise bridge needs attention. See _folderwise-sync-status.md in your vault.', home)
     last['issue_signature'] = signature
     save(home / 'last-run.json', last)
     with (home / 'bridge.log').open('a') as log:

@@ -16,6 +16,7 @@ Exit code 0 = all passed, 1 = something failed.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -985,6 +986,37 @@ def s_ibridge():
     check('bridge exports dashboard and completed tasks', rc == 0 and '## Completed tasks' in (vault / 'Tasks.md').read_text()
           and '- [x] Completed task' in view.read_text() and 'Example only' not in view.read_text(), out)
     check('bridge excludes Git and instructions', not (vault / 'alpha/.git').exists() and not (vault / 'alpha/AGENTS.md').exists())
+    report_path=vault/'_folderwise-sync-status.md'
+    legacy=vault/'Bridge Status.md'
+    legacy_data=report_path.read_bytes().replace(b'# Folderwise sync status',b'# Bridge Status',1)
+    report_path.unlink();legacy.write_bytes(legacy_data)
+    legacy_manifest={'hash':hashlib.sha256(legacy_data).hexdigest()}
+    (home/'report.json').write_text(json.dumps(legacy_manifest))
+    rc,out=invoke('plan')
+    check('status migration dry run preserves the legacy report and ownership',rc==0 and legacy.exists() and not report_path.exists()
+          and json.loads((home/'report.json').read_text())==legacy_manifest,out)
+    report_path.write_text('User-owned destination\n')
+    rc,out=invoke('sync')
+    check('status migration refuses an unowned destination without removing the old report',rc==1 and legacy.read_bytes()==legacy_data
+          and report_path.read_text()=='User-owned destination\n',out)
+    report_path.unlink()
+    rc,out=invoke('sync')
+    check('status report migrates from the legacy owned name',rc==0 and report_path.exists() and not legacy.exists()
+          and json.loads((home/'report.json').read_text())['path']=='_folderwise-sync-status.md',out)
+    stamp=report_path.stat().st_mtime_ns
+    rc,out=invoke('sync')
+    check('migrated status report is idempotent',rc==0 and report_path.stat().st_mtime_ns==stamp,out)
+    report_path.unlink();legacy.write_bytes(legacy_data+b'User notes\n')
+    (home/'report.json').write_text(json.dumps(legacy_manifest))
+    rc,out=invoke('sync')
+    check('edited legacy report is preserved and explained in the new report',rc==1 and legacy.read_bytes()==legacy_data+b'User notes\n'
+          and 'legacy report has unowned edits' in report_path.read_text(),out)
+    legacy.unlink();invoke('sync')
+    legacy.write_bytes(report_path.read_bytes())
+    rc,out=invoke('sync')
+    check('unowned legacy report is preserved even when its bytes match the current report',rc==1 and legacy.exists()
+          and 'legacy report has unowned edits' in report_path.read_text(),out)
+    legacy.unlink();invoke('sync')
     view.write_text(view.read_text().replace('- [ ] First task', '- [x] First task'))
     rc, out = invoke('sync')
     _, log = sh(['git', 'log', '-1', '--format=%B'], cwd=alpha)
@@ -1019,7 +1051,7 @@ def s_ibridge():
     view.write_text(view.read_text().replace('First task', 'Phone prose edit'))
     rc, out = invoke('sync')
     check('unsupported phone edits are preserved and reported', rc == 1 and 'Phone prose edit' in view.read_text()
-          and 'only checkbox' in (vault / 'Bridge Status.md').read_text(), out)
+          and 'only checkbox' in (vault / '_folderwise-sync-status.md').read_text(), out)
     view.write_text(view.read_text().replace('Phone prose edit', 'First task'))
     invoke('sync')
     # Adapter lives in project, uses a CSV, and hides completed rows in normal Markdown.
@@ -1073,13 +1105,13 @@ elif op=='validate':
     check('full mode exports other tracked content',rc==0 and (vault/'alpha/large.pdf').exists(),out)
     invoke('configure','--mode','lean','--max-image-bytes','5','--max-images-total-bytes','4')
     rc,out=invoke('sync')
-    status=(vault/'Bridge Status.md').read_text()
+    status=(vault/'_folderwise-sync-status.md').read_text()
     check('lean mode honors both limits and cleans unchanged owned copies',rc==0 and (vault/'alpha/docs/assets/a.png').exists()
           and not (vault/'alpha/large.pdf').exists() and not (vault/'alpha/docs/assets/unused.png').exists()
           and 'exceeds per-image limit' in status and 'exceeds aggregate image limit' in status,out)
-    stamp=(vault/'Bridge Status.md').stat().st_mtime_ns
+    stamp=(vault/'_folderwise-sync-status.md').stat().st_mtime_ns
     invoke('sync')
-    check('unchanged report does not churn every scheduled run',(vault/'Bridge Status.md').stat().st_mtime_ns==stamp)
+    check('unchanged report does not churn every scheduled run',(vault/'_folderwise-sync-status.md').stat().st_mtime_ns==stamp)
     invoke('configure','--unlimited-images')
     rc,out=invoke('sync')
     check('unlimited image setting restores all referenced images',rc==0 and (vault/'alpha/docs/assets/b.png').exists()
@@ -1235,7 +1267,7 @@ elif op=='validate':
     rc,out=invoke('sync')
     check('malformed adapter response fails visibly without replacing the vault',rc==1 and 'JSON array' in out,out)
     cfg['adapters']={};conf.write_text(json.dumps(cfg));invoke('sync')
-    check('unmapped generated tasks are explicitly reported','requires an adapter' in (vault/'Bridge Status.md').read_text())
+    check('unmapped generated tasks are explicitly reported','requires an adapter' in (vault/'_folderwise-sync-status.md').read_text())
     conf.write_text(json.dumps(original_cfg));invoke('sync')
     # Attachment references, image ordering and unknown files remain predictable.
     original=note.read_text()
@@ -1346,9 +1378,9 @@ elif op=='validate':
     invoke('configure','--mode','lean')
     rc,out=invoke('plan');check('plan describes cleanup without removing files',rc==0 and 'REMOVE if unchanged: alpha/payload.bin' in out and collision.exists(),out)
     invoke('sync')
-    saved=(vault/'Bridge Status.md').read_text();(vault/'Bridge Status.md').write_text('User-owned status edits\n')
-    rc,out=invoke('sync');check('status report cannot overwrite user edits',rc==1 and 'unowned edits' in out and (vault/'Bridge Status.md').read_text()=='User-owned status edits\n',out)
-    (vault/'Bridge Status.md').write_text(saved)
+    saved=(vault/'_folderwise-sync-status.md').read_text();(vault/'_folderwise-sync-status.md').write_text('User-owned status edits\n')
+    rc,out=invoke('sync');check('status report cannot overwrite user edits',rc==1 and 'unowned edits' in out and (vault/'_folderwise-sync-status.md').read_text()=='User-owned status edits\n',out)
+    (vault/'_folderwise-sync-status.md').write_text(saved)
     # Obstructed destination type and incomplete setup get specific diagnostics.
     mirror.unlink();mirror.mkdir()
     rc,out=invoke('sync');check('a directory cannot masquerade as an exported file',rc==1 and 'expected a file' in out,out)

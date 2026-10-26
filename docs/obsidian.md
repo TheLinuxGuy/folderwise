@@ -48,7 +48,34 @@ Configuration, ownership records, baselines, temporary clones, export journal an
 
 In Obsidian on Mac and iPhone, install and enable the community **Tasks** plugin (`obsidian-tasks-plugin`). Open the exported root `Tasks.md` in reading mode. It includes open and completed tasks across all enabled projects, grouped by project. Every result links to its source document. Undated and nested tasks are included; no tag is required. Tasks inside fenced code examples, front matter and generated blocks are excluded from generic Markdown scanning.
 
-The bridge creates `_Folderwise Tasks/<project>.md` as a task projection. This preserves completed CSV-backed tasks for reopening even if their ordinary generated backlog hides them. The dashboard queries only this folder, avoiding duplicate results from copied source notes. [Tasks queries can update their source checkboxes](https://publish.obsidian.md/tasks/Introduction); the Mac then imports the resulting file change.
+### Generated task folder and naming
+
+`TASK_DIR` is the tool’s internal constant for **`_Folderwise Tasks`**, a bridge-managed folder at the root of the **iCloud vault**. It is not a folder in your authoritative Mac project repositories. The bridge builds one task-view file per enabled project, combining its supported handwritten Markdown checkboxes and tasks supplied by its configured CSV adapter.
+
+The naming convention is **`_Folderwise Tasks/<project-folder-name>.md`**: the filename exactly matches the project directory name, followed by `.md`. For example:
+
+```text
+Folderwise/                         # iCloud Obsidian vault
+├── Tasks.md                        # central dashboard: open and completed queries
+├── _folderwise-sync-status.md      # generated sync issues and storage report
+├── _Folderwise Tasks/
+│   ├── finances.md                 # task view for the finances project
+│   └── home-lab.md                 # task view for the home-lab project
+├── finances/                       # selected copies of project documents
+└── home-lab/
+```
+
+These names are fixed by the bridge, not user-configurable settings. Each generated file has a project heading and ordinary `- [ ]` / `- [x]` task lines with links to the copied source documents. Completed tasks remain available for reopening, including completed rows returned by an adapter even if the project’s normal backlog hides them. `Tasks.md` queries only `_Folderwise Tasks`, avoiding duplicate results from copied source notes. [Tasks queries can update their source checkboxes](https://publish.obsidian.md/tasks/Introduction).
+
+On each scheduled or manual `sync`, the bridge:
+
+1. Compares checkbox changes in the previous generated views with its local task mappings.
+2. Applies those boolean changes to authoritative Mac Markdown or adapter-managed records, regenerates affected source views, validates, and commits local changes.
+3. Rebuilds the project task views and dashboard from the current Mac sources. It writes files only when content changes. New projects join when enabled; disabling a project removes its unchanged generated task-view file after pending phone changes are resolved.
+
+To refresh immediately, run `uv run _tools/icloud_bridge.py sync` on the Mac. The scheduled job performs the same operation at your configured interval.
+
+**Toggle checkboxes; do not edit titles, add tasks, reorder lines, or rename these files or their folder.** Only checkbox on/off changes are imported. Unsupported edits and conflicts are preserved and reported in `_folderwise-sync-status.md`; the bridge does not overwrite them with a regenerated view. Missing generated files are restored from Mac data on the next sync. Task identity and ownership mappings live in the bridge’s local state outside iCloud; the generated Markdown is an interactive view, not the authoritative task store.
 
 Configure Tasks for simple toggles: disable automatic done/created/cancelled dates, leave its global filter empty, use ordinary space/x statuses, and avoid recurring tasks or on-completion deletion. Those features modify more than a checkbox and are outside this bridge's contract. A plugin-added date is preserved and reported as an unsupported edit, rather than silently discarded. Dataview is optional for property tables; [Dataview TASK](https://blacksmithgu.github.io/obsidian-dataview/queries/query-types/#task) can also toggle a checkbox, provided completion metadata insertion is disabled.
 
@@ -139,9 +166,9 @@ Limits apply to individual images and all selected images across enabled project
 
 ### Bridge status report
 
-The generated `Bridge Status.md` lives at the root of your iCloud vault. It lists sync issues and gives you details to investigate a notification.
+The generated `_folderwise-sync-status.md` lives at the root of your iCloud vault. It lists sync issues and gives you details to investigate a notification. On upgrade, the bridge replaces an unchanged, bridge-owned `Bridge Status.md` with this name. Edited or unowned legacy reports are preserved and flagged in the new report; review and move them outside the vault to clear the warning. An existing edited destination is never overwritten.
 
-`Bridge Status.md` lists omitted files, sizes and reasons, including configured-limit omissions and missing/untracked referenced images. It reports selected export bytes, selected image bytes, and currently present managed payload bytes, **not** account free space or an iCloud bill. Current payload size excludes generated status/settings and unowned files, and can exceed the new selection when a conflict prevents cleanup. Obsidian plugins, unrelated vault files, iCloud retention and other account data can consume additional storage. Lowering limits removes only unchanged bridge-owned copies; modified phone files are preserved and reported. The report only changes when its meaningful content changes.
+`_folderwise-sync-status.md` lists omitted files, sizes and reasons, including configured-limit omissions and missing/untracked referenced images. It reports selected export bytes, selected image bytes, and currently present managed payload bytes, **not** account free space or an iCloud bill. Current payload size excludes generated status/settings and unowned files, and can exceed the new selection when a conflict prevents cleanup. Obsidian plugins, unrelated vault files, iCloud retention and other account data can consume additional storage. Lowering limits removes only unchanged bridge-owned copies; modified phone files are preserved and reported. The report only changes when its meaningful content changes.
 
 ## Schedule, notifications, and controls
 
@@ -176,7 +203,7 @@ uv run _tools/icloud_bridge.py schedule-prepare
 
 This writes the owned entry point under the local state directory's `bin/` and a `launchagent-preview.plist` beside the config. It works on Mac and Linux for review/testing; actual job registration still requires macOS. Preparation refuses to replace a customized entry point. `schedule-enable` prepares it automatically and upgrades existing jobs that launched `uv` directly. Uninstall removes an unchanged generated entry point and preserves one that has been customized.
 
-**Mac alerts when sync needs attention.** The bridge confirms setup and sends a summary when a run detects new conflicts, failed imports, or image-budget omissions. Open the vault’s `Bridge Status.md` for details; routine successful runs stay quiet.
+**Mac alerts when sync needs attention.** The bridge confirms setup and sends a summary when a run detects new conflicts, failed imports, or image-budget omissions. Open the vault’s `_folderwise-sync-status.md` for details; routine successful runs stay quiet.
 
 ![Folderwise iBridge setup notification on macOS confirming a five-minute schedule](assets/ibridge-macos-notification.png)
 
@@ -222,7 +249,7 @@ Use the same `--config /absolute/path/config.json` argument as your installed br
 
 ## Conflicts and recovery
 
-Phone imports are evaluated against the last accepted baseline, not modification timestamps. Unsupported or conflicting edits freeze export so they cannot be overwritten. Read `Bridge Status.md` and local logs; preserve the edited vault file outside managed paths, resolve the corresponding source on Mac, then restore the exported file to its previous baseline or apply only the intended checkbox change. Do not erase bridge state to make a conflict disappear.
+Phone imports are evaluated against the last accepted baseline, not modification timestamps. Unsupported or conflicting edits freeze export so they cannot be overwritten. Read `_folderwise-sync-status.md` and local logs; preserve the edited vault file outside managed paths, resolve the corresponding source on Mac, then restore the exported file to its previous baseline or apply only the intended checkbox change. Do not erase bridge state to make a conflict disappear.
 
 Export uses a local journal (`export.json`) so interrupted copies can finish on a later run. Replay proceeds only when each destination still matches the old or intended bytes and each source payload remains unchanged. If either side changed, it stops and preserves the files. Keep independent backups of your source repositories.
 
