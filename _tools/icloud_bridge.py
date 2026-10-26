@@ -721,6 +721,18 @@ def remove_launcher(home):
             print('Preserved customized launch entry point: ' + str(launcher))
 
 
+NOTIFICATION_VISIBILITY = (
+    'Notification requested; macOS controls whether a banner is visible. '
+    'If it only appears in Notification Center, check System Settings > Notifications > Folderwise iBridge '
+    '(Allow notifications and Desktop), Focus, and Notifications > when mirroring or sharing the display. '
+    'The bridge does not change these settings; allowing shared-display notifications can expose other apps’ messages.'
+)
+
+
+def setup_notification(settings):
+    return f"folderwise-ibridge is now enabled. Sync job is running and scheduled every {settings['interval_minutes']} minutes."
+
+
 def schedule(settings, config_path, enable):
     if sys.platform != "darwin":
         raise ValueError("scheduling requires macOS; use sync manually on other systems")
@@ -744,10 +756,13 @@ def schedule(settings, config_path, enable):
     run(["launchctl", "enable", domain + "/" + LABEL])
     subprocess.run(["launchctl", "bootout", domain + "/" + LABEL], capture_output=True)
     run(["launchctl", "bootstrap", domain, path])
-    message = f"folderwise-ibridge is now enabled. Sync job is running and scheduled every {settings['interval_minutes']} minutes."
+    message = setup_notification(settings)
     save(config_path.parent / "schedule.json", {"enabled": True, "interval_minutes": settings["interval_minutes"]})
-    if settings["notifications"] != "off" and not notify(message, config_path.parent):
-        print("Notification could not be sent; check macOS notification settings. Scheduling succeeded.")
+    if settings["notifications"] != "off":
+        if not notify(message, config_path.parent):
+            print("Notification could not be requested. Scheduling succeeded; use notify-test to retry.")
+        else:
+            print(NOTIFICATION_VISIBILITY)
     print(message)
 
 
@@ -907,6 +922,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", type=Path, default=DEFAULT_HOME / "config.json")
     ap.add_argument("--dry-run", action="store_true", help="preview setup without changing vaults, projects or defaults")
+    ap.add_argument("--setup-message", action="store_true", help="notify-test: replay the setup-success text with the configured interval")
     ap.add_argument("--no-schedule", action="store_true", help="initialize and sync without registering a macOS job")
     ap.add_argument("--source", type=Path)
     ap.add_argument("--vault", type=Path)
@@ -919,6 +935,8 @@ def main():
     ap.add_argument("command", choices=["setup", "configure", "plan", "sync", "status", "enable", "disable", "schedule-enable", "schedule-disable", "doctor", "logs", "notify-test", "vault-init", "uninstall", "schedule-prepare"])
     ap.add_argument("project", nargs="?")
     args = ap.parse_args()
+    if args.setup_message and args.command != "notify-test":
+        ap.error("--setup-message requires notify-test")
     path = args.config.expanduser().absolute()
     try:
         with locked(path.parent):
@@ -983,8 +1001,11 @@ def main():
                 if args.command == "schedule-enable" and sync(settings, path.parent):
                     raise ValueError("resolve sync errors before scheduling")
             elif args.command == "notify-test":
-                if not notify("Folderwise iBridge notifications work.", path.parent):
-                    raise ValueError("notification delivery failed (macOS notification app required)")
+                message = setup_notification(settings) if args.setup_message else "Folderwise iBridge notifications work."
+                if not notify(message, path.parent):
+                    raise ValueError("notification request failed (macOS notification app required)")
+                print(message)
+                print(NOTIFICATION_VISIBILITY)
             elif args.command == "doctor":
                 files, _, omissions = inventory(settings)
                 for key in files:

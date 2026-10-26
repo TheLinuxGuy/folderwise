@@ -1153,6 +1153,15 @@ elif op=='validate':
           and not (app/'Contents/Resources/Assets.car').exists(),out)
     check('notification app launches and clears the message handoff', '-W -n -g '+str(app) in (root/'os-calls').read_text() and not (home/'notification-message.txt').exists(),out)
     check('notification text is handed off as UTF-8 data', (root/'notification-body').read_text()=='Folderwise iBridge notifications work.',out)
+    check('notification test distinguishes a request from visible delivery',rc==0 and 'Notification requested; macOS controls' in out
+          and 'when mirroring or sharing the display' in out and 'can expose other apps' in out,out)
+    invoke('configure','--interval-minutes','9')
+    rc,out=invoke('notify-test','--setup-message',env=env)
+    check('one-command setup notification replay uses the configured interval',rc==0
+          and (root/'notification-body').read_text()=='folderwise-ibridge is now enabled. Sync job is running and scheduled every 9 minutes.',out)
+    invoke('configure','--interval-minutes','5')
+    rc,out=invoke('status','--setup-message',env=env)
+    check('setup notification replay flag rejects unrelated commands',rc==2 and '--setup-message requires notify-test' in out,out)
     compiled=icon.stat().st_mtime_ns
     rc,out=invoke('notify-test',env=env)
     check('unchanged notification app is reused',rc==0 and icon.stat().st_mtime_ns==compiled,out)
@@ -1262,7 +1271,13 @@ elif op=='validate':
     # Explicit notification failure is diagnostic and never mutates task records.
     (fake/'open').write_text('#!/bin/sh\nexit 1\n')
     rc,out=invoke('notify-test',env=env)
-    check('notification failure is reported by the explicit test command',rc==1 and 'delivery failed' in out,out)
+    check('notification failure is reported by the explicit test command',rc==1 and 'request failed' in out,out)
+    if sys.platform=='darwin':
+        rc,out=invoke('schedule-enable',env=env)
+        check('failed setup notification does not claim delivery or undo scheduling',rc==0
+              and 'could not be requested' in out and 'Notification requested;' not in out
+              and json.loads((home/'schedule.json').read_text())['enabled'],out)
+        invoke('schedule-disable',env=env)
     (home/'bridge.log').write_text('old log\n'*150000)
     invoke('sync')
     check('local bridge log rotates instead of growing forever',(home/'bridge.previous.log').exists())

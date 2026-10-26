@@ -192,6 +192,22 @@ uv run _tools/icloud_bridge.py configure --notifications errors
 
 The default is `errors`; `off` also suppresses the enable announcement. `notify-test` is an explicit request to display a test regardless of that preference. Local `bridge.log` rotates at about 1 MB; launchd's stdout/stderr logs are separate files in the configuration directory. `doctor` reports pending failures, stale scheduled runs and interval mismatches. Use `launchctl print gui/$(id -u)/org.folderwise.ibridge` for OS diagnostics; the bridge does not parse its unstable output format.
 
+### A notification appears only in Notification Center
+
+A successful app launch or a macOS log entry saying “presenting as banner” is not proof that a banner was visible on the desktop. The bridge reports **Notification requested**, rather than claiming a banner appeared. macOS remains responsible for presentation.
+
+Check **System Settings → Notifications → Folderwise iBridge**: enable **Allow notifications** and **Desktop**, and choose Temporary or Persistent to suit your preference. Check the active Focus and its app exceptions. **Summarize notifications** changes preview text; it is separate from the Reduce Interruptions Focus that can silence alerts.
+
+If you use Screen Sharing, remote desktop, screen recording, or display mirroring, also check **System Settings → Notifications → when mirroring or sharing the display**. With **Notifications Off**, macOS may keep notifications in Notification Center without showing them at the top-right corner. If a computer-use or screen-reading assistant is active, end its capture session before testing; that capture can count as display sharing even when you are not presenting to another person. End the sharing session to test ordinary desktop delivery, or consciously choose **Allow Notifications** if that suits your setup. This is a global privacy preference: allowing it can show other apps’ private messages to people viewing your display. Folderwise never changes it automatically. See [Apple’s notification settings guide](https://support.apple.com/en-ie/guide/mac-help/mh40583/27/mac/27).
+
+Repeat the setup-success notification with one command, without reinstalling or restarting the scheduled job:
+
+```sh
+uv run _tools/icloud_bridge.py notify-test --setup-message
+```
+
+Use the same `--config /absolute/path/config.json` argument as your installed bridge when its configuration is outside the default location. This command replays the setup wording using the configured interval; it does not change schedule state. Plain `notify-test` sends a generic test instead. Both explicitly request a notification even when bridge notifications are configured off, and print the macOS visibility checks. A test cannot override denied notification access, Focus, or shared-display privacy controls.
+
 ## Conflicts and recovery
 
 Phone imports are evaluated against the last accepted baseline, not modification timestamps. Unsupported or conflicting edits freeze export so they cannot be overwritten. Read `Bridge Status.md` and local logs; preserve the edited vault file outside managed paths, resolve the corresponding source on Mac, then restore the exported file to its previous baseline or apply only the intended checkbox change. Do not erase bridge state to make a conflict disappear.
