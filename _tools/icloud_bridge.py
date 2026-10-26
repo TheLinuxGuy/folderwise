@@ -3,7 +3,7 @@
 # requires-python = ">=3.10"
 # dependencies = ["pyyaml", "tzdata"]
 # ///
-"""Folderwise iCloud bridge: Mac-owned export and boolean task import.
+"""Folderwise iCloud bridge: Mac-owned export and Obsidian task/note imports.
 
 Commands: setup, configure, plan, sync, resolve, status, enable, disable, schedule-enable,
 schedule-disable, schedule-prepare, doctor, logs, notify-test, vault-init, uninstall. See docs/obsidian.md before setup.
@@ -27,7 +27,7 @@ import sys
 import tempfile
 import time
 import unicodedata
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote, urlsplit
 
@@ -35,6 +35,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import docslib as dl  # noqa: E402
+import ibridge_tasks as taskfmt  # noqa: E402
 
 TOOLS = Path(__file__).resolve().parent
 LABEL = "org.folderwise.ibridge"
@@ -44,7 +45,7 @@ LEGACY_REPORT = "Bridge Status.md"
 REPORT, DASHBOARD, TASK_DIR = "_folderwise-sync-status.md", "Tasks.md", "_Folderwise Tasks"
 IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif", ".heic", ".bmp"}
 SKIP = {"AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", "_doc-template.md", "node_modules", "__pycache__", "#recycle", "credentials.json", "id_rsa", "id_ed25519"}
-CHECKBOX = re.compile(r"^(\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\].*)$")
+CHECKBOX = taskfmt.CHECKBOX
 SOURCE_TAIL = " ([source]("
 MAX_TITLE = 200
 KEEP_DAYS, KEEP_ENTRIES = 30, 10
@@ -249,11 +250,14 @@ def tracked(project):
     return sorted(files)
 
 
-def markdown_tasks(text, path):
+def markdown_tasks(text, path, status_types=None):
     """List tasks outside front matter, fenced examples and generated blocks."""
     tasks, counts = [], {}
+    status_types = status_types or {'x': 'DONE', 'X': 'DONE'}
     generated = False
-    for line, raw in enumerate(dl.mask_for_links(text).splitlines()):
+    lines = text.splitlines()
+    masked_lines = taskfmt.mask_fences(dl.mask_for_links(text)).splitlines()
+    for line, raw in enumerate(masked_lines):
         if re.search(r"<!--\s*[^>]*:start\b", raw):
             generated = True
         if generated:
@@ -262,12 +266,38 @@ def markdown_tasks(text, path):
             continue
         m = CHECKBOX.match(raw)
         if m:
-            identity = m[1] + " " + m[3]
+            parsed = taskfmt.fields(m[3][1:].strip())
+            identity = m[1] + " ] " + parsed['description']
             ordinal = counts.get(identity, 0)
             counts[identity] = ordinal + 1
             key = "md:" + digest((path + "\0" + identity + "\0" + str(ordinal)).encode())
-            tasks.append(dict(id=key, checked=m[2] != " ", path=path, line=line,
-                              title=m[3][1:].strip(), identity=identity))
+            # Include indented continuation text, never the next task or a generated region.
+            context = []
+            indent = len(raw.expandtabs(4)) - len(raw.expandtabs(4).lstrip(' >'))
+            for number, tail in enumerate(lines[line + 1:], line + 1):
+                if CHECKBOX.match(masked_lines[number]) or '<!--' in tail:
+                    break
+                if tail.strip() and len(tail.expandtabs(4)) - len(tail.expandtabs(4).lstrip(' >')) <= indent:
+                    break
+                context.append(tail)
+            while context and not context[-1].strip():
+                context.pop()
+            ancestors, level = [], indent
+            for number in range(line - 1, -1, -1):
+                prior = lines[number]
+                if not masked_lines[number].strip():
+                    continue
+                if prior.startswith('#'):
+                    break
+                depth = len(prior.expandtabs(4)) - len(prior.expandtabs(4).lstrip(' >'))
+                if prior.strip() and depth < level and re.match(r'[\t >]*(?:[-*+]|\d+[.)])\s+', prior):
+                    if not CHECKBOX.match(prior):
+                        ancestors.insert(0, [number, prior])
+                    level = depth
+                    if level == 0:
+                        break
+            tasks.append(dict(id=key, checked=status_types.get(m[2]) == 'DONE', status=m[2], head=m[1], path=path, line=line,
+                              title=m[3][1:].lstrip(), identity=identity, context=context, ancestors=ancestors))
     for task in tasks:
         task["duplicate"] = counts[task["identity"]] > 1
         task["source_hash"] = digest(text.encode())
@@ -310,6 +340,7 @@ def adapter(settings, project, operation, changes=None):
 
 def inventory(settings, selected_projects=None, failed=None):
     files, tasks, omissions = {}, {}, []
+    status_types = tasks_compatibility(settings)
     total_images = 0
     for project, cfg in (projects(settings, failed=failed) if selected_projects is None else selected_projects).items():
         mark = (set(files), len(omissions), total_images)
@@ -320,7 +351,7 @@ def inventory(settings, selected_projects=None, failed=None):
                 if Path(rel).suffix.lower() != ".md":
                     continue
                 text = safe(project, rel).read_text()
-                local_tasks.extend(markdown_tasks(text, rel))
+                local_tasks.extend(markdown_tasks(text, rel, status_types))
                 blocks = re.findall(r'<!--\s*([\w-]+):start\b[^>]*-->(.*?)<!--\s*\1:end\s*-->', text, re.S)
                 if project.name not in settings.get("adapters", {}) and any(CHECKBOX.match(line) for _, block in blocks for line in block.splitlines()):
                     omissions.append(dict(path=project.name + '/' + rel, bytes=0, reason='generated task source requires an adapter (document is still exported)'))
@@ -363,14 +394,26 @@ def inventory(settings, selected_projects=None, failed=None):
                     total_images += size
                 files[key] = p
             can_rename = cfg.get("folderwise-ibridgerename", False)
-            note = ("Generated task view. Checkbox toggles and title edits are imported; keep each line's trailing (source) link."
-                    if can_rename else "Generated task view. Only checkbox toggles are imported.")
+            note = ("Generated task view. Checkbox toggles, statuses, metadata and title edits are imported; keep source links before metadata."
+                    if can_rename else "Generated task view. Checkbox toggles, statuses and metadata are imported; title edits are off for this project.")
             projection = [f"# {project.name} tasks", "", note, ""]
             mapping = []
+            emitted, last_path = set(), None
             for task in local_tasks:
+                if task['path'] != last_path:
+                    projection.extend(['', '## ' + task['path'], ''])
+                    last_path = task['path']
+                for number, ancestor in task.get('ancestors', []):
+                    if (task['path'], number) not in emitted:
+                        projection.append(ancestor)
+                        emitted.add((task['path'], number))
                 target = quote(project.name + "/" + task["path"], safe="/")
                 mapping.append(dict(line=len(projection), id=task["id"], checked=task["checked"]))
-                projection.append(f"- [{'x' if task['checked'] else ' '}] {view_title(task['title'])}{SOURCE_TAIL}../{target}))")
+                link = f'{SOURCE_TAIL}../{target} "fw:{digest(task["id"].encode())}"))'
+                title = taskfmt.render(taskfmt.fields(taskfmt.project_ids(view_title(task['title']))), source=link)
+                projection.append(f"{task.get('head', '- [')}{task.get('status', 'x' if task['checked'] else ' ')}] {title}")
+                projection.extend(task.get('context', []))
+                emitted.update((task['path'], task.get('line', -1) + 1 + i) for i in range(len(task.get('context', []))))
             files[f"{TASK_DIR}/{project.name}.md"] = ("\n".join(projection) + "\n").encode()
             tasks[project.name]["_projection"] = mapping
         except (ValueError, OSError, yaml.YAMLError) as exc:
@@ -393,8 +436,9 @@ class Rejected(ValueError):
     """A phone edit the Mac will not apply. A generated view can be restored once its text is saved."""
 
 
-def task_changes(base, current):
+def task_changes(base, current, status_types=None):
     before, after = base.splitlines(keepends=True), current.splitlines(keepends=True)
+    status_types = status_types or {' ': 'TODO', 'x': 'DONE', 'X': 'DONE', '/': 'IN_PROGRESS', '-': 'CANCELLED'}
     if len(before) != len(after):
         raise Rejected("only checkbox on/off changes are supported (the number of lines changed)")
     changed = {}
@@ -402,9 +446,25 @@ def task_changes(base, current):
         if old == new:
             continue
         a, b = CHECKBOX.match(old.rstrip("\r\n")), CHECKBOX.match(new.rstrip("\r\n"))
-        if not a or not b or a[1] != b[1] or a[3] != b[3] or old[len(old.rstrip('\r\n')):] != new[len(new.rstrip('\r\n')):]:
+        if (not a or not b or re.sub(r'\s+\[$', ' [', a[1]) != re.sub(r'\s+\[$', ' [', b[1]) or
+                old[len(old.rstrip('\r\n')):] != new[len(new.rstrip('\r\n')):]):
             raise Rejected(f"line {i + 1}: only checkbox on/off changes are supported")
-        changed[i] = dict(checked=b[2] != " ", title=None)
+        title = None
+        if a[3] != b[3]:
+            try:
+                prior, parsed = taskfmt.fields(a[3][1:].lstrip()), taskfmt.fields(b[3][1:].lstrip())
+                taskfmt.validate(parsed)
+                taskfmt.safe_text(b[3])
+                if prior['description'] != parsed['description']:
+                    raise ValueError('description edits require an editable note')
+            except ValueError as exc:
+                raise Rejected(f'line {i + 1}: only checkbox or task metadata changes are supported ({exc})') from None
+            title = b[3][1:].lstrip()
+        if b[2] not in status_types:
+            raise Rejected('unknown task status; configure its type in the Tasks plugin first')
+        changed[i] = dict(checked=None if a[2] == b[2] else status_types[b[2]] == 'DONE', title=title)
+        if a[2] != b[2]:
+            changed[i]['status'] = b[2]
     return changed
 
 
@@ -413,8 +473,10 @@ def clean_title(title):
     text = unicodedata.normalize("NFC", title).strip()
     if not text or len(text) > MAX_TITLE:
         raise Rejected(f"a title must be 1-{MAX_TITLE} characters")
-    if any(unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") for c in text):
-        raise Rejected("a title cannot contain control, direction or line-break characters")
+    try:
+        taskfmt.safe_text(text)
+    except ValueError as exc:
+        raise Rejected(str(exc)) from None
     if "<!--" in text or "-->" in text or SOURCE_TAIL in text or text[0] in "=+-@" or re.match(r"\[[ xX]\]", text):
         raise Rejected("a title cannot contain comment markers, a source link or a checkbox, or start with = + - @")
     if view_title(text) != text:
@@ -435,7 +497,7 @@ def split_view(line):
     return m[1], m[2], rest[:cut], rest[cut:], line[len(body):]
 
 
-def view_changes(base, current, renames):
+def legacy_view_changes(base, current, renames):
     """Toggles and, when allowed, title edits in a generated view; anything else is rejected."""
     before, after = base.splitlines(keepends=True), current.splitlines(keepends=True)
     if len(before) != len(after):
@@ -470,16 +532,109 @@ def view_changes(base, current, renames):
     return changed
 
 
+def view_changes(base, current, renames, status_types=None):
+    try:
+        return _view_changes(base, current, renames, status_types)
+    except ValueError as exc:
+        raise Rejected(str(exc)) from None
+
+
+def _view_changes(base, current, renames, status_types):
+    """Validate stable rows, allowing Tasks field edits and its two-row recurrence output."""
+    before, after = base.splitlines(keepends=True), current.splitlines(keepends=True)
+    before_mask = taskfmt.mask_fences(dl.mask_for_links(base)).splitlines()
+    after_mask = taskfmt.mask_fences(dl.mask_for_links(current)).splitlines()
+    old = [(i, taskfmt.view_row(line)) for i, line in enumerate(before) if CHECKBOX.match(before_mask[i]) and taskfmt.view_row(line)]
+    if not old or any(' "fw:' not in row['source'] for _, row in old):
+        return legacy_view_changes(base, current, renames)
+    new_rows = [(i, taskfmt.view_row(line)) for i, line in enumerate(after) if CHECKBOX.match(after_mask[i]) and taskfmt.view_row(line)]
+    new = [row for _, row in new_rows]
+    status_types = status_types or {' ': 'TODO', 'x': 'DONE', 'X': 'DONE', '/': 'IN_PROGRESS', '-': 'CANCELLED'}
+    old_lines, new_lines = {i for i, _ in old}, {i for i, _ in new_rows}
+    if [line for i, line in enumerate(before) if i not in old_lines] != [line for i, line in enumerate(after) if i not in new_lines]:
+        raise Rejected('only checkbox or task field edits are supported; keep the checkbox and source link (the number of lines changed or task context was edited)')
+    tokens = [row['token'] for row in new]
+    collapsed = [token for i, token in enumerate(tokens) if i == 0 or tokens[i - 1] != token]
+    deletable = {row['token'] for _, row in old if taskfmt.fields(row['title'])['fields'].get('onCompletion') == 'delete'}
+    expected = [row['token'] for _, row in old if row['token'] in tokens or row['token'] not in deletable]
+    if collapsed != expected:
+        raise Rejected('reordering, duplicating or deleting tasks is not supported; keep each task source link')
+    known = [taskfmt.fields(row['title'])['description'] for _, row in old]
+    changed, fresh, offset = {}, set(), 0
+    for line, a in old:
+        group = []
+        while offset < len(new) and new[offset]['token'] == a['token']:
+            group.append(new[offset])
+            offset += 1
+        if not group:
+            changed[line] = dict(checked=None, title=None, delete=True)
+            continue
+        if len(group) > 2:
+            raise Rejected('a recurrence may create exactly one next occurrence')
+        for b in group:
+            if (re.sub(r'\s+\[$', ' [', a['head']), a['source'], a['ending']) != (re.sub(r'\s+\[$', ' [', b['head']), b['source'], b['ending']):
+                raise Rejected('keep task indentation, checkbox and source link unchanged')
+            if taskfmt.fields(b['suffix'])['description']:
+                raise Rejected('keep the checkbox and the trailing source link before task metadata; description text belongs before the link')
+        a_fields = taskfmt.fields(a['title'])
+        if len(group) == 2:
+            if not a_fields['fields'].get('repeat') or status_types.get(a['status']) == 'DONE':
+                raise Rejected('only a recurring task may create a next occurrence')
+            completed = [row for row in group if status_types.get(row['status']) == 'DONE']
+            if len(completed) != 1:
+                raise Rejected('a recurrence must contain one completed and one open occurrence')
+            b = completed[0]
+            completed_fields = taskfmt.fields(b['title'])
+            for row in group:
+                parsed = taskfmt.fields(row['title'])
+                if (parsed['description'] != completed_fields['description'] or not parsed['fields'].get('repeat') or
+                        parsed['fields'].get('repeat') != completed_fields['fields'].get('repeat')):
+                    raise Rejected('recurrence rows must share a description and repeat rule')
+        else:
+            b = group[0]
+        if a == b and len(group) == 1:
+            continue
+        try:
+            if b['status'] not in status_types:
+                raise ValueError('unknown task status; configure its type in the Tasks plugin first')
+            parsed = taskfmt.fields(b['title'])
+            taskfmt.validate(parsed)
+            taskfmt.safe_text(b['title'])
+            for row in group:
+                if row['status'] not in status_types:
+                    raise ValueError('unknown task status; configure its type in the Tasks plugin first')
+                taskfmt.validate(taskfmt.fields(row['title']))
+                taskfmt.safe_text(row['title'])
+        except ValueError as exc:
+            raise Rejected(f'line {line + 1}: {exc}') from None
+        description_changed = parsed['description'] != a_fields['description']
+        if description_changed:
+            if not renames:
+                raise Rejected(f'line {line + 1}: title edits are off for this project')
+            clean_title(parsed['description'])
+            if parsed['description'] in known or parsed['description'] in fresh:
+                raise Rejected('that title is already used by another task; reordering or duplicating tasks is not supported')
+            fresh.add(parsed['description'])
+        change = dict(checked=None if a['status'] == b['status'] else status_types[b['status']] == 'DONE',
+                      title=None if a['title'] == b['title'] else b['title'])
+        if a['status'] != b['status']:
+            change['status'] = b['status']
+        if len(group) == 2:
+            change['recurrence'] = [dict(title=row['title'], status=row['status']) for row in group]
+        changed[line] = change
+    return changed
+
+
 def merge_edits(target, staged):
     """Merge one file's task edits into the project's; two files may not disagree about a task."""
     merged = {key: dict(value) for key, value in target.items()}
     for key, change in staged.items():
         prior = merged.get(key)
         if prior:
-            for field in ("checked", "title"):
-                if prior[field] is not None and change[field] is not None and prior[field] != change[field]:
+            for field in prior.keys() | change.keys():
+                if prior.get(field) is not None and change.get(field) is not None and prior[field] != change[field]:
                     raise Rejected("conflicting edits of the same task")
-            change = {field: prior[field] if change[field] is None else change[field] for field in prior}
+            change = {field: prior.get(field) if change.get(field) is None else change[field] for field in prior.keys() | change.keys()}
         merged[key] = change
     return merged
 
@@ -530,7 +685,7 @@ def settled(quiet, key, fingerprint):
     return quiet["now"] - seen["since"] >= quiet["settle"]
 
 
-def requests(vault, state, renames=frozenset(), failures=None, editors=None, quiet=None):
+def requests(vault, state, renames=frozenset(), failures=None, editors=None, quiet=None, status_types=None):
     """Collect phone edits: (task edits per project, files each project's edits came from, vault hashes
     accepted as valid, generated views rejected with the reason, note text edits per project, notes
     still waiting out the quiet period).
@@ -543,28 +698,44 @@ def requests(vault, state, renames=frozenset(), failures=None, editors=None, qui
             p = safe(vault, key)
             if not p.is_file() or "text" not in entry:
                 continue
-            data = p.read_text()
+            raw = p.read_bytes()
+            data = raw.decode().replace('\r\n', '\n')
+            fingerprint = digest(raw)
             if data == entry["text"]:
                 continue
             try:
-                delta = view_changes(entry["text"], data, project in renames) if view else task_changes(entry["text"], data)
+                delta = view_changes(entry["text"], data, project in renames, status_types) if view else task_changes(entry["text"], data, status_types)
             except Rejected:
-                if view or not editors or not editable(editors, key):
+                if view:
+                    if quiet is not None and quiet['settle'] and not settled(quiet, key, fingerprint):
+                        waiting.add(key)
+                        continue
+                    raise
+                if not editors or not editable(editors, key):
                     raise
                 text = note_edit(entry["text"], data)
-                if quiet is not None and not settled(quiet, key, content_hash(p)):
+                if quiet is not None and not settled(quiet, key, fingerprint):
                     waiting.add(key)
                     continue
                 edits.setdefault(project, {})[key.split("/", 1)[1]] = text
             else:
+                textual = any(change.get('title') is not None or change.get('recurrence') or change.get('delete') for change in delta.values())
+                if textual and quiet is not None and quiet['settle'] and not settled(quiet, key, fingerprint):
+                    waiting.add(key)
+                    continue
                 mapping = {t["line"]: t for t in entry.get("tasks", [])}
                 staged = {}
                 for line, change in delta.items():
                     if line not in mapping:
                         raise Rejected("checkbox has no authoritative task mapping")
+                    if view and change.get('title') is not None:
+                        change['title'] = taskfmt.project_ids(change['title'], inverse=True)
+                    if view and change.get('recurrence'):
+                        for row in change['recurrence']:
+                            row['title'] = taskfmt.project_ids(row['title'], inverse=True)
                     staged[mapping[line]["id"]] = change
                 wanted[project] = merge_edits(wanted.get(project, {}), staged)
-            accepted_hash = content_hash(p)
+            accepted_hash = fingerprint
         except Rejected as exc:
             if view:
                 rejected[key] = str(exc)
@@ -583,14 +754,20 @@ def requests(vault, state, renames=frozenset(), failures=None, editors=None, qui
     return wanted, sources, accepted, rejected, edits, waiting
 
 
-def rewrite_task(line, checked, title):
+def rewrite_task(line, checked, title, status=None):
     """Change one task line's checkbox and/or title, keeping its bullet, spacing and line ending."""
     body = line.rstrip("\r\n")
     m = CHECKBOX.match(body)
     rest = m[3][1:]
     if title is not None:
-        rest = rest[:len(rest) - len(rest.lstrip())] + title + rest[len(rest.rstrip()):]
-    mark = m[2] if checked is None else ("x" if checked else " ")
+        trailing = title[len(title.rstrip()):]
+        rest = rest[:len(rest) - len(rest.lstrip())] + title.rstrip() + trailing
+    mark = status if status is not None else m[2] if checked is None else ("x" if checked else " ")
+    if checked is False or mark == ' ':
+        parsed = taskfmt.fields(rest.lstrip())
+        if 'done' in parsed['fields']:
+            parsed['parts'] = [(key, raw) for key, raw in parsed['parts'] if key != 'done']
+            rest = rest[:len(rest) - len(rest.lstrip())] + taskfmt.render(parsed)
     return m[1] + mark + "]" + rest + line[len(body):]
 
 
@@ -601,24 +778,35 @@ def plan_import(name, wanted, baseline, current):
         if key not in current or key not in baseline:
             raise Rejected(f"{name}: task changed or disappeared on Mac; resolve pending edit")
         task, old = current[key], baseline[key]
+        status = want.get('status')
+        if status is not None and task.get('status') not in {old.get('status'), status, None}:
+            raise Rejected(f'{name}: task status also changed on the Mac')
         if task.get("duplicate") and task["source_hash"] != old.get("source_hash"):
             raise Rejected(f"{name}: duplicate task moved during concurrent edit")
-        if want["checked"] is not None and task["checked"] != want["checked"]:
+        if want["checked"] is not None and (task["checked"] != want["checked"] or want.get('status') != task.get('status')):
             toggles[key] = want["checked"]
         title = want["title"]
         if title is not None and title != task["title"]:
             reason = None
-            if task["title"] != old["title"]:
-                reason = "its title also changed on the Mac"
-            elif task.get("duplicate"):
+            parsed = taskfmt.fields(title)
+            original_description = taskfmt.fields(old['title'])['description']
+            if parsed['description'] == view_title(original_description):
+                title = taskfmt.render(parsed, description=original_description)
+            desc_changed = taskfmt.fields(title)['description'] != taskfmt.fields(old['title'])['description']
+            if task.get("duplicate") and desc_changed:
                 reason = "other tasks share its title"
-            elif not task["title"] or view_title(task["title"]) != task["title"]:
+            elif desc_changed and (not task["title"] or view_title(task["title"]) != task["title"]):
                 reason = "its title is empty or contains links or images"
-            elif key.startswith("adapter:") and "title" not in task.get("editable", []):
+            elif desc_changed and key.startswith("adapter:") and "title" not in task.get("editable", []):
                 reason = "its adapter does not allow title edits"
             if reason:
                 raise Rejected(f"{name}: a task cannot be renamed from the phone ({reason}); edit it on the Mac")
-            renames[key] = title
+            try:
+                merged = taskfmt.merge_title(old['title'], title, task['title'])
+                if merged != task['title']:
+                    renames[key] = merged
+            except ValueError as exc:
+                raise Rejected(f'{name}: task title or metadata conflict: {exc}') from None
     return toggles, renames
 
 
@@ -656,27 +844,71 @@ def project_transaction(project, home):
         git(project, "merge", "--ff-only", "--quiet", "FETCH_HEAD")
     finally:
         if clone.exists():
-            shutil.rmtree(clone)
+            # Python 3.10 can race uv removing its own temporary lock file. A missing
+            # cleanup entry must not hide the actual transaction/phone-conflict error.
+            with suppress(FileNotFoundError):
+                shutil.rmtree(clone)
 
 
-def import_project(settings, project, wanted, baseline, current, home, edits=None):
+def import_project(settings, project, wanted, baseline, current, home, edits=None, phone_guard=None):
     edits = edits or {}
+    wanted = dict(wanted)
+    # A crash may publish the local commit before publishing its export/state journal.
+    # Recognise the exact already-created pair; never execute recurrence creation twice.
+    for key, change in list(wanted.items()):
+        rows = change.get('recurrence')
+        if not rows or key not in baseline:
+            continue
+        path = baseline[key]['path']
+        matches = []
+        for row in rows:
+            found = [k for k, task in current.items() if k != '_projection' and task['path'] == path and
+                     task['title'] == row['title'] and task.get('status', 'x' if task['checked'] else ' ') == row['status']]
+            if len(found) == 1:
+                matches.append(found[0])
+        if len(matches) == len(rows) and any(k not in baseline for k in matches):
+            del wanted[key]
     toggles, renames = plan_import(project.name, wanted, baseline, current)
-    if not toggles and not renames and not edits:
+    recurrences = {key: want['recurrence'] for key, want in wanted.items() if want.get('recurrence')}
+    deletions = {key for key, want in wanted.items() if want.get('delete')}
+    title_count = sum(taskfmt.fields(value)['description'] != taskfmt.fields(current[key]['title'])['description']
+                      for key, value in renames.items())
+    field_count = len(renames) - title_count
+    if not toggles and not renames and not edits and not recurrences and not deletions:
         return None
-    touched = {current[key]["path"] for key in toggles.keys() | renames.keys() if not key.startswith("adapter:")}
+    touched = {current[key]["path"] for key in toggles.keys() | renames.keys() | recurrences.keys() | deletions if not key.startswith("adapter:")}
     if touched & edits.keys():
         raise ValueError(f"{project.name}: a note was edited on the phone and one of its tasks was changed in the same run; "
                          "resolve one of them first")
     with project_transaction(project, home) as clone:
         md, ac, originals = {}, [], {}
-        for key in sorted(toggles.keys() | renames.keys()):
+        for key in sorted(toggles.keys() | renames.keys() | recurrences.keys() | deletions):
             task = current[key]
             checked, title = toggles.get(key), renames.get(key)
             if key.startswith("adapter:"):
                 item = dict(id=key[len("adapter:"):], checked=task["checked"] if checked is None else checked)
                 if title is not None:
                     item.update(title=title, expected_title=task["title"])
+                    old_fields, new_fields = taskfmt.fields(task['title']), taskfmt.fields(title)
+                    fields = {field: new_fields['fields'].get(field) for field in old_fields['fields'].keys() | new_fields['fields'].keys()
+                              if old_fields['fields'].get(field) != new_fields['fields'].get(field)}
+                    if fields:
+                        if not fields.keys() <= set(task.get('editable', [])):
+                            raise Rejected('adapter does not allow these task fields: ' + ', '.join(sorted(fields.keys() - set(task.get('editable', [])))))
+                        item.update(fields=fields, expected_fields=old_fields['fields'])
+                status = wanted[key].get('status')
+                if status is not None and status not in ' xX':
+                    if 'status' not in task.get('editable', []):
+                        raise Rejected('adapter does not allow custom status edits')
+                    item['status'] = status
+                if key in recurrences:
+                    if 'recurrence' not in task.get('editable', []):
+                        raise Rejected('adapter does not allow recurrence creation')
+                    item['recurrence'] = recurrences[key]
+                if key in deletions:
+                    if 'delete' not in task.get('editable', []):
+                        raise Rejected('adapter does not allow on-completion deletion')
+                    item.update(delete=True, expected_title=task['title'])
                 ac.append(item)
             else:
                 rel = task["path"]
@@ -684,15 +916,28 @@ def import_project(settings, project, wanted, baseline, current, home, edits=Non
                     raise ValueError("source changed while preparing task transaction")
                 original = originals.setdefault(rel, safe(clone, rel).read_bytes().decode())
                 lines = md.setdefault(rel, original.splitlines(keepends=True))
-                lines[task["line"]] = rewrite_task(lines[task["line"]], checked, title)
+                if key in deletions:
+                    if task['source_hash'] != baseline[key]['source_hash']:
+                        raise Rejected('task source changed on the Mac; review before deleting its completed line')
+                    lines[task['line']] = ''
+                elif key in recurrences:
+                    if task['source_hash'] != baseline[key]['source_hash']:
+                        raise Rejected('recurring task source changed on the Mac; review before creating its next occurrence')
+                    parts = [rewrite_task(lines[task['line']], None, row['title'], row['status']) for row in recurrences[key]]
+                    lines[task['line']] = ''.join(parts) if lines[task['line']].endswith('\n') else '\n'.join(parts)
+                else:
+                    lines[task["line"]] = rewrite_task(lines[task["line"]], checked, title, wanted[key].get('status'))
         for rel, lines in md.items():
             renamed = {key: renames[key] for key in renames if current[key].get("path") == rel and not key.startswith("adapter:")}
             before = markdown_tasks(originals[rel], rel)
             after = markdown_tasks("".join(lines), rel)
             ids = {t["id"] for t in before}
-            # A rename must replace exactly the renamed tasks and nothing else in the note.
-            if (len(after) != len(before) or ids - {t["id"] for t in after} != set(renamed)
-                    or sorted(t["title"] for t in after if t["id"] not in ids) != sorted(renamed.values())):
+            actual_renames = {key for key, value in renamed.items()
+                              if taskfmt.fields(value)['description'] != taskfmt.fields(current[key]['title'])['description']}
+            additions = sum(1 for key in recurrences if current[key]['path'] == rel)
+            removed = {key for key in deletions if current[key]['path'] == rel}
+            if (len(after) != len(before) + additions - len(removed) or
+                    (not additions and ids - {t["id"] for t in after} != actual_renames | removed)):
                 raise ValueError(f"{project.name}/{rel}: rename would change more than the requested tasks")
             safe(clone, rel).write_bytes("".join(lines).encode())
         for rel, text in sorted(edits.items()):
@@ -702,6 +947,8 @@ def import_project(settings, project, wanted, baseline, current, home, edits=Non
             adapter(settings, clone, "apply", ac)
         config = dl.parse_config((clone / dl.CONFIG_NAME).read_text())
         parts = ["Toggle and rename tasks" if toggles and renames else "Rename tasks" if renames else "Toggle tasks"] if toggles or renames else []
+        if field_count or recurrences or deletions:
+            parts = ['Update task fields and occurrences']
         if edits:
             parts.append("edit notes" if parts else "Edit notes")
         summary = " and ".join(parts) + " via Obsidian iCloud bridge"
@@ -709,7 +956,8 @@ def import_project(settings, project, wanted, baseline, current, home, edits=Non
             if rel.endswith(".md"):
                 p = safe(clone, rel)
                 raw = p.read_bytes().decode()
-                text, errors, _ = dl.stamp_text(raw.replace("\r\n", "\n"), p.name, config, "human", summary)
+                text, errors, _ = dl.stamp_text(raw.replace("\r\n", "\n"), p.name, config, "human",
+                                              summary + f' (import {digest(raw.encode())[:12]})')
                 if errors:
                     raise ValueError("; ".join(errors))
                 p.write_bytes((text.replace("\n", "\r\n") if "\r\n" in raw else text).encode())
@@ -718,29 +966,46 @@ def import_project(settings, project, wanted, baseline, current, home, edits=Non
             actual = {t["id"]: t for t in adapter(settings, clone, "list")}
             for item in ac:
                 got = actual.get("adapter:" + item["id"])
+                if item.get('delete'):
+                    if got is not None:
+                        raise ValueError('adapter did not delete the completed task')
+                    continue
                 if got is None or got["checked"] != item["checked"]:
                     raise ValueError("adapter did not apply requested checkbox states")
                 if "title" in item and unicodedata.normalize("NFC", got["title"]).strip() != item["title"]:
                     raise ValueError("adapter did not apply the requested title")
+                if 'status' in item and got.get('status') != item['status']:
+                    raise ValueError('adapter did not apply the requested status')
+                if 'recurrence' in item:
+                    next_rows = [t for t in actual.values() if t['id'] != 'adapter:' + item['id'] and
+                                 any(t['title'] == r['title'] for r in item['recurrence'] if r['status'] not in 'xX')]
+                    if len(next_rows) != 1:
+                        raise ValueError('adapter did not create exactly one next occurrence')
         run(["uv", "run", "--quiet", TOOLS / "docs_lint.py"], clone)
         git(clone, "add", "--all")
         if edits:
             subject = "Update tasks and notes from Obsidian" if toggles or renames else "Update notes from Obsidian"
-            body = (f"Apply {len(toggles)} user checkbox toggle(s), {len(renames)} user title edit(s) and {len(edits)} user note edit(s) "
+            body = (f"Apply {len(toggles)} user checkbox toggle(s), {title_count} user title edit(s) and {len(edits)} user note edit(s) "
                     "and regenerate authoritative views.\n\nCheckbox state, task titles and note text are user-typed; "
                     "no factual verification was performed.\n")
         elif renames:
             subject = "Update tasks from Obsidian"
-            body = (f"Apply {len(toggles)} user checkbox toggle(s) and {len(renames)} user title edit(s) and regenerate authoritative views.\n\n"
+            body = (f"Apply {len(toggles)} user checkbox toggle(s) and {title_count} user title edit(s) and regenerate authoritative views.\n\n"
                     "Checkbox state and task titles are user-typed; no factual verification was performed.\n")
         else:
             subject = "Update task completion from Obsidian"
             body = (f"Apply {len(toggles)} user checkbox toggle(s) and regenerate authoritative views.\n\n"
                     "Checkbox state is user-reported; no factual verification was performed.\n")
+        if field_count or recurrences or deletions:
+            body += f'Metadata updates: {field_count}; recurrences: {len(recurrences)}; completed-line deletions: {len(deletions)}.\n'
         git(clone, "commit", "--quiet", "-m", subject, "-m",
             body + f"Validation: project adapter, Folderwise lint and Git hooks.\n\nBridge: folderwise-ibridge\n"
-            f"Bridge-Ops: toggle={len(toggles)} rename={len(renames)}" + (f" text-edit={len(edits)}" if edits else ""))
-    return dict(commit=git(project, "rev-parse", "--short", "HEAD").strip(), toggled=len(toggles), renamed=len(renames), edited=len(edits))
+            f"Bridge-Ops: toggle={len(toggles)} rename={title_count}" + (f" text-edit={len(edits)}" if edits else "")
+            + (f" metadata={field_count} recur={len(recurrences)} delete={len(deletions)}" if field_count or recurrences or deletions else ""))
+        if phone_guard is not None:
+            phone_guard()
+    return dict(commit=git(project, "rev-parse", "--short", "HEAD").strip(), toggled=len(toggles), renamed=title_count,
+                edited=len(edits), metadata=field_count, recurred=len(recurrences), deleted=len(deletions))
 
 
 def stash_phone_text(home, key, path):
@@ -940,8 +1205,8 @@ def report(files, omissions, issues, settings, managed_bytes, ledger=None, copie
         rows += ["", "## Phone edits waiting", "", "These notes are imported once their text has stayed unchanged for the quiet period.", ""]
         rows += [f"- {cell(w)}" for w in waiting]
     if ledger.get("imports"):
-        rows += ["", "## Recent imports", "", "| When | Project | Commit | Toggled | Renamed | Edited |", "| --- | --- | --- | ---: | ---: | ---: |"]
-        rows += [f"| {e['at']} | {cell(e['project'])} | {e['commit']} | {e['toggled']} | {e['renamed']} | {e.get('edited', 0)} |" for e in ledger["imports"]]
+        rows += ["", "## Recent imports", "", "| When | Project | Commit | Toggled | Renamed | Edited | Fields | Recurred | Deleted |", "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
+        rows += [f"| {e['at']} | {cell(e['project'])} | {e['commit']} | {e['toggled']} | {e['renamed']} | {e.get('edited', 0)} | {e.get('metadata', 0)} | {e.get('recurred', 0)} | {e.get('deleted', 0)} |" for e in ledger["imports"]]
     if copies:
         rows += ["", "## iCloud conflict copies", "", "These files were not imported. Compare each with its original and delete the one you do not want.", ""]
         rows += [f"- {cell(c)}" for c in copies]
@@ -1012,7 +1277,7 @@ def sync(settings, home, dry=False):
     issues, notices, held, run_imports, preview = [], [], {}, [], []
     files, tasks, omissions = {}, {}, []
     ledger = read_json(home / 'ledger.json', {'imports': [], 'rejected': []})
-    accepted, restored, edits, waiting = {}, set(), {}, set()
+    accepted, restored, edits, waiting, settling = {}, set(), {}, set(), set()
     quiet = dict(pending=copy.deepcopy(read_json(home / 'pending.json', {})), now=time.time(), keep=set(),
                  settle=settings.get('edit_settle_seconds', EDIT_SETTLE_SECONDS))
 
@@ -1031,6 +1296,22 @@ def sync(settings, home, dry=False):
         state = read_json(home / 'state.json', {'files': {}, 'tasks': {}})
         active = projects(settings, failed=None if dry else held)
         files, tasks, omissions = inventory(settings, selected_projects=active, failed=None if dry else held)
+        # Upgrade schema-2 text-derived identities only when the exact source snapshot agrees.
+        for name, previous in state.get('tasks', {}).items():
+            replacements = {}
+            for key, old_task in list(previous.items()):
+                if not key.startswith('md:') or key in tasks.get(name, {}):
+                    continue
+                candidates = [t for k, t in tasks.get(name, {}).items() if k.startswith('md:') and
+                              all(t.get(field) == old_task.get(field) for field in ('path', 'line', 'source_hash'))]
+                if len(candidates) == 1:
+                    replacements[key] = candidates[0]['id']
+            for old_key, new_key in replacements.items():
+                previous[new_key] = previous.pop(old_key)
+            for entry in state['files'].values():
+                if entry.get('project') == name:
+                    for task in entry.get('tasks', []):
+                        task['id'] = replacements.get(task['id'], task['id'])
         snapshot = {}
         for key in state['files'].keys() | files.keys():
             try:
@@ -1042,7 +1323,8 @@ def sync(settings, home, dry=False):
                 held[name] = f"{key}: {exc}"
         renames = {p.name for p, cfg in active.items() if cfg.get("folderwise-ibridgerename", False)}
         editors = edit_projects(settings, active)
-        pending, sources, accepted, rejected, edits, waiting = requests(vault, state, renames, held, editors, quiet)
+        pending, sources, accepted, rejected, edits, waiting = requests(vault, state, renames, held, editors, quiet, tasks_compatibility(settings))
+        settling = {owner(key) for key in waiting if key.startswith(TASK_DIR + '/')}
         for name in list(edits):
             for rel in edits[name]:
                 key = name + '/' + rel
@@ -1066,17 +1348,22 @@ def sync(settings, home, dry=False):
                 except Rejected as exc:
                     preview.append(f'PHONE EDIT REJECTED {name}: {exc}; the text would be saved and the view restored')
                 else:
-                    if toggles or renames:
+                    if toggles or renames or any(w.get('delete') or w.get('recurrence') for w in wanted.values()):
                         preview.append(f'PHONE EDIT {name}: would toggle {len(toggles)} and rename {len(renames)} task(s)')
         else:
             if pending.keys() - {p.name for p in active} - held.keys():
                 raise ValueError('disabled project has pending phone edits; re-enable and import before disabling')
             for project in active:
-                if (project.name not in pending and project.name not in edits) or project.name in held:
+                if (project.name not in pending and project.name not in edits) or project.name in held or project.name in settling:
                     continue
                 try:
+                    def phone_guard():
+                        for key in sources.get(project.name, set()):
+                            if existing_hash(safe(vault, key)) != accepted[key] or accepted[key] != snapshot.get(key):
+                                raise ValueError(f'{key}: vault changed during import; phone text preserved for next run')
+                    phone_guard()
                     done = import_project(settings, project, pending.get(project.name, {}), state['tasks'].get(project.name, {}),
-                                          tasks[project.name], home, edits.get(project.name))
+                                          tasks[project.name], home, edits.get(project.name), phone_guard)
                 except Rejected as exc:
                     origin = sources.get(project.name, set())
                     if origin and all(k.startswith(TASK_DIR + '/') for k in origin):
@@ -1126,7 +1413,7 @@ def sync(settings, home, dry=False):
                 if key in waiting and key in state['files']:
                     next_files[key] = state['files'][key]
                     continue
-                if name in held:
+                if name in held or name in settling:
                     continue
                 try:
                     target = safe(vault, key)
@@ -1157,7 +1444,7 @@ def sync(settings, home, dry=False):
                     held[name] = str(exc)
             for key, old in state['files'].items():
                 name = owner(key)
-                if key in files or name in held:
+                if key in files or name in held or name in settling:
                     continue
                 try:
                     p = safe(vault, key)
@@ -1169,15 +1456,15 @@ def sync(settings, home, dry=False):
                     if name is None:
                         raise
                     held[name] = str(exc)
-            for key in [k for k in list(next_files) + list(removes) if owner(k) in held]:
+            for key in [k for k in list(next_files) + list(removes) if owner(k) in held or owner(k) in settling]:
                 next_files.pop(key, None)
                 writes.pop(key, None)
                 removes.pop(key, None)
             for key, old in state['files'].items():
-                if owner(key) in held:
+                if owner(key) in held or owner(key) in settling:
                     next_files[key] = old
-            kept = {name: state['tasks'][name] for name in held if name in state['tasks']}
-            save(home / 'export.json', dict(writes=writes, removes=removes, state={'files': next_files, 'tasks': {**tasks, **kept}, 'schema': 2}))
+            kept = {name: state['tasks'][name] for name in held.keys() | settling if name in state['tasks']}
+            save(home / 'export.json', dict(writes=writes, removes=removes, state={'files': next_files, 'tasks': {**tasks, **kept}, 'schema': 3}))
             recover_export(home, vault)
         except (ValueError, OSError) as exc:
             if deferrable(home, exc):
@@ -1222,7 +1509,7 @@ def sync(settings, home, dry=False):
     if mode != 'off' and (issues or actionable or notices) and previous.get('issue_signature') != signature:
         last['notification_sent'] = notify('Folderwise bridge needs attention. See _folderwise-sync-status.md in your vault.', home)
     elif mode == 'imports' and run_imports:
-        changes = sum(item['toggled'] + item['renamed'] + item.get('edited', 0) for item in run_imports)
+        changes = sum(sum(item.get(field, 0) for field in ('toggled', 'renamed', 'edited', 'metadata', 'recurred', 'deleted')) for item in run_imports)
         last['notification_sent'] = notify(f'Folderwise applied {changes} phone change(s) in {len(run_imports)} project(s). '
                                            'See _folderwise-sync-status.md in your vault.', home)
     last['issue_signature'] = signature
@@ -1334,6 +1621,43 @@ def seed_vaults(settings, home):
             owned[rel] = content_hash(asset)
             # Retain ownership even if setup is interrupted between setting files.
             save(home / 'vault-defaults.json', manifest)
+
+
+def tasks_compatibility(settings, diagnose=False):
+    """Read the phone vault's settings without changing user choices or installing plugins."""
+    root = Path(settings['vault'])
+    data = read_json(safe(root, '.obsidian/plugins/obsidian-tasks-plugin/data.json'), {})
+    if not isinstance(data, dict):
+        raise ValueError('Tasks settings must be a JSON object')
+    if data.get('taskFormat', 'tasksPluginEmoji') not in {'tasksPluginEmoji', 'dataview'}:
+        raise ValueError('unsupported Tasks taskFormat; use tasksPluginEmoji or dataview')
+    statuses = {' ': 'TODO', 'x': 'DONE', 'X': 'DONE', '/': 'IN_PROGRESS', '-': 'CANCELLED'}
+    registry = data.get('statusSettings', {})
+    if not isinstance(registry, dict):
+        raise ValueError('Tasks statusSettings must be an object')
+    for entries in ('coreStatuses', 'customStatuses'):
+        values = registry.get(entries, [])
+        if not isinstance(values, list):
+            raise ValueError('Tasks status entries must be lists')
+        for entry in values:
+            if (not isinstance(entry, dict) or not isinstance(entry.get('symbol'), str) or len(entry['symbol']) != 1 or
+                    unicodedata.category(entry['symbol']).startswith('C') or entry.get('type') not in {'TODO', 'DONE', 'IN_PROGRESS', 'CANCELLED', 'NON_TASK'}):
+                raise ValueError('invalid Tasks status configuration')
+            statuses[entry['symbol']] = entry['type']
+    if diagnose:
+        manifest = read_json(safe(root, '.obsidian/plugins/obsidian-tasks-plugin/manifest.json'), {})
+        plugins = read_json(safe(root, '.obsidian/community-plugins.json'), [])
+        print('Tasks version: ' + str(manifest.get('version', 'not installed; install and enable Tasks on each device')))
+        print('Compatibility fixtures: Tasks 8.6.0; verify other versions with the iPhone acceptance checklist')
+        print('Task format: ' + data.get('taskFormat', 'tasksPluginEmoji') + '; automatic lifecycle dates supported')
+        if 'obsidian-tasks-plugin' not in plugins:
+            print('WARNING Tasks is not enabled in this vault; the generated Tasks dashboard requires it')
+        if data.get('globalFilter'):
+            print('WARNING non-empty Tasks globalFilter may hide tasks; clear it to show the complete dashboard')
+        if manifest.get('version') and manifest['version'] != '8.6.0':
+            print('WARNING installed Tasks version differs from the compatibility fixtures')
+        print('Custom status types: ' + ', '.join(repr(k) + '=' + v for k, v in statuses.items()))
+    return statuses
 
 
 def enroll_project(project, home):
@@ -1535,7 +1859,15 @@ def main():
                 print(message)
                 print(NOTIFICATION_VISIBILITY)
             elif args.command == "doctor":
-                files, _, omissions = inventory(settings)
+                tasks_compatibility(settings, diagnose=True)
+                files, task_sets, omissions = inventory(settings)
+                plugin = read_json(safe(Path(settings['vault']), '.obsidian/plugins/obsidian-tasks-plugin/data.json'), {})
+                for group in task_sets.values():
+                    for key, task in group.items():
+                        if key.startswith('adapter:'):
+                            for option, field in (('setDoneDate', 'done'), ('setCancelledDate', 'cancelled'), ('setCreatedDate', 'created')):
+                                if plugin.get(option, option != 'setCreatedDate') and field not in task.get('editable', []):
+                                    raise ValueError(f'adapter lacks {field} capability but Tasks {option} is enabled; disable that option or update the adapter')
                 for key in files:
                     safe(Path(settings["vault"]), key)
                 if not shutil.which('uv'):

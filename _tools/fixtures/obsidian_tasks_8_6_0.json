@@ -1,0 +1,192 @@
+{
+  "upstream": "obsidian-tasks-group/obsidian-tasks",
+  "commit": "6c7e9a1443e645f29998619974329b61cd2d52dd",
+  "version": "8.6.0",
+  "generatedAt": "2026-10-26T12:00:00Z",
+  "cases": [
+    {
+      "name": "tasksPluginEmoji_complete",
+      "format": "tasksPluginEmoji",
+      "before": "- [ ] Fixture __SOURCE__ ⏫ 📅 2026-11-01",
+      "after": [
+        "- [x] Fixture __SOURCE__ ⏫ 📅 2026-11-01 ✅ 2026-10-26"
+      ]
+    },
+    {
+      "name": "tasksPluginEmoji_cancel",
+      "format": "tasksPluginEmoji",
+      "before": "- [ ] Fixture __SOURCE__ 📅 2026-11-01",
+      "after": [
+        "- [-] Fixture __SOURCE__ 📅 2026-11-01 ❌ 2026-10-26"
+      ]
+    },
+    {
+      "name": "tasksPluginEmoji_reopen",
+      "format": "tasksPluginEmoji",
+      "before": "- [x] Fixture __SOURCE__ ✅ 2026-10-25",
+      "after": [
+        "- [ ] Fixture __SOURCE__"
+      ]
+    },
+    {
+      "name": "tasksPluginEmoji_daily",
+      "format": "tasksPluginEmoji",
+      "before": "- [ ] Fixture __SOURCE__ 🆔 original 🔁 every day 📅 2026-11-01",
+      "after": [
+        "- [ ] Fixture __SOURCE__ 🔁 every day 📅 2026-11-02",
+        "- [x] Fixture __SOURCE__ 🆔 original 🔁 every day 📅 2026-11-01 ✅ 2026-10-26"
+      ]
+    },
+    {
+      "name": "tasksPluginEmoji_weekly",
+      "format": "tasksPluginEmoji",
+      "before": "- [ ] Fixture __SOURCE__ 🔁 every week on Monday 📅 2026-11-02",
+      "after": [
+        "- [ ] Fixture __SOURCE__ 🔁 every week on Monday 📅 2026-11-09",
+        "- [x] Fixture __SOURCE__ 🔁 every week on Monday 📅 2026-11-02 ✅ 2026-10-26"
+      ]
+    },
+    {
+      "name": "tasksPluginEmoji_monthly",
+      "format": "tasksPluginEmoji",
+      "before": "- [ ] Fixture __SOURCE__ 🔁 every month 📅 2026-11-01",
+      "after": [
+        "- [ ] Fixture __SOURCE__ 🔁 every month 📅 2026-12-01",
+        "- [x] Fixture __SOURCE__ 🔁 every month 📅 2026-11-01 ✅ 2026-10-26"
+      ]
+    },
+    {
+      "name": "tasksPluginEmoji_when_done",
+      "format": "tasksPluginEmoji",
+      "before": "- [ ] Fixture __SOURCE__ 🔁 every week when done 📅 2026-11-01",
+      "after": [
+        "- [ ] Fixture __SOURCE__ 🔁 every week when done 📅 2026-11-02",
+        "- [x] Fixture __SOURCE__ 🔁 every week when done 📅 2026-11-01 ✅ 2026-10-26"
+      ]
+    },
+    {
+      "name": "tasksPluginEmoji_no_date",
+      "format": "tasksPluginEmoji",
+      "before": "- [ ] Fixture __SOURCE__ 🔁 every day",
+      "after": [
+        "- [ ] Fixture __SOURCE__ 🔁 every day",
+        "- [x] Fixture __SOURCE__ 🔁 every day ✅ 2026-10-26"
+      ]
+    },
+    {
+      "name": "tasksPluginEmoji_delete",
+      "format": "tasksPluginEmoji",
+      "before": "- [ ] Fixture __SOURCE__ 🏁 delete",
+      "after": []
+    },
+    {
+      "name": "tasksPluginEmoji_recur_delete",
+      "format": "tasksPluginEmoji",
+      "before": "- [ ] Fixture __SOURCE__ 🔁 every day 🏁 delete 📅 2026-11-01",
+      "after": [
+        "- [ ] Fixture __SOURCE__ 🔁 every day 🏁 delete 📅 2026-11-02"
+      ]
+    },
+    {
+      "name": "tasksPluginEmoji_completed_first",
+      "format": "tasksPluginEmoji",
+      "before": "- [ ] Fixture __SOURCE__ 🔁 every day 📅 2026-11-01",
+      "after": [
+        "- [x] Fixture __SOURCE__ 🔁 every day 📅 2026-11-01 ✅ 2026-10-26",
+        "- [ ] Fixture __SOURCE__ 🔁 every day 📅 2026-11-02"
+      ]
+    },
+    {
+      "name": "dataview_complete",
+      "format": "dataview",
+      "before": "- [ ] Fixture __SOURCE__  [priority:: high]  [due:: 2026-11-01]",
+      "after": [
+        "- [x] Fixture __SOURCE__  [priority:: high]  [due:: 2026-11-01]  [completion:: 2026-10-26]"
+      ]
+    },
+    {
+      "name": "dataview_cancel",
+      "format": "dataview",
+      "before": "- [ ] Fixture __SOURCE__  [due:: 2026-11-01]",
+      "after": [
+        "- [-] Fixture __SOURCE__  [due:: 2026-11-01]  [cancelled:: 2026-10-26]"
+      ]
+    },
+    {
+      "name": "dataview_reopen",
+      "format": "dataview",
+      "before": "- [x] Fixture __SOURCE__  [completion:: 2026-10-25]",
+      "after": [
+        "- [ ] Fixture __SOURCE__"
+      ]
+    },
+    {
+      "name": "dataview_daily",
+      "format": "dataview",
+      "before": "- [ ] Fixture __SOURCE__  [id:: original]  [repeat:: every day]  [due:: 2026-11-01]",
+      "after": [
+        "- [ ] Fixture __SOURCE__  [repeat:: every day]  [due:: 2026-11-02]",
+        "- [x] Fixture __SOURCE__  [id:: original]  [repeat:: every day]  [due:: 2026-11-01]  [completion:: 2026-10-26]"
+      ]
+    },
+    {
+      "name": "dataview_weekly",
+      "format": "dataview",
+      "before": "- [ ] Fixture __SOURCE__  [repeat:: every week on Monday]  [due:: 2026-11-02]",
+      "after": [
+        "- [ ] Fixture __SOURCE__  [repeat:: every week on Monday]  [due:: 2026-11-09]",
+        "- [x] Fixture __SOURCE__  [repeat:: every week on Monday]  [due:: 2026-11-02]  [completion:: 2026-10-26]"
+      ]
+    },
+    {
+      "name": "dataview_monthly",
+      "format": "dataview",
+      "before": "- [ ] Fixture __SOURCE__  [repeat:: every month]  [due:: 2026-11-01]",
+      "after": [
+        "- [ ] Fixture __SOURCE__  [repeat:: every month]  [due:: 2026-12-01]",
+        "- [x] Fixture __SOURCE__  [repeat:: every month]  [due:: 2026-11-01]  [completion:: 2026-10-26]"
+      ]
+    },
+    {
+      "name": "dataview_when_done",
+      "format": "dataview",
+      "before": "- [ ] Fixture __SOURCE__  [repeat:: every week when done]  [due:: 2026-11-01]",
+      "after": [
+        "- [ ] Fixture __SOURCE__  [repeat:: every week when done]  [due:: 2026-11-02]",
+        "- [x] Fixture __SOURCE__  [repeat:: every week when done]  [due:: 2026-11-01]  [completion:: 2026-10-26]"
+      ]
+    },
+    {
+      "name": "dataview_no_date",
+      "format": "dataview",
+      "before": "- [ ] Fixture __SOURCE__  [repeat:: every day]",
+      "after": [
+        "- [ ] Fixture __SOURCE__  [repeat:: every day]",
+        "- [x] Fixture __SOURCE__  [repeat:: every day]  [completion:: 2026-10-26]"
+      ]
+    },
+    {
+      "name": "dataview_delete",
+      "format": "dataview",
+      "before": "- [ ] Fixture __SOURCE__  [onCompletion:: delete]",
+      "after": []
+    },
+    {
+      "name": "dataview_recur_delete",
+      "format": "dataview",
+      "before": "- [ ] Fixture __SOURCE__  [repeat:: every day]  [onCompletion:: delete]  [due:: 2026-11-01]",
+      "after": [
+        "- [ ] Fixture __SOURCE__  [repeat:: every day]  [onCompletion:: delete]  [due:: 2026-11-02]"
+      ]
+    },
+    {
+      "name": "dataview_completed_first",
+      "format": "dataview",
+      "before": "- [ ] Fixture __SOURCE__  [repeat:: every day]  [due:: 2026-11-01]",
+      "after": [
+        "- [x] Fixture __SOURCE__  [repeat:: every day]  [due:: 2026-11-01]  [completion:: 2026-10-26]",
+        "- [ ] Fixture __SOURCE__  [repeat:: every day]  [due:: 2026-11-02]"
+      ]
+    }
+  ]
+}

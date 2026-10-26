@@ -1125,6 +1125,11 @@ def s_ibridge():
     sandbox_env = {}
 
     def invoke(*args, env=None):
+        # Legacy fixtures exercise immediate transactions; settling has its own mobile tests.
+        if args and args[0] == 'sync' and conf.exists():
+            cfg = json.loads(conf.read_text())
+            cfg['edit_settle_seconds'] = 0
+            conf.write_text(json.dumps(cfg))
         return tool('icloud_bridge.py', '--config', conf, *args, env={**sandbox_env, **(env or {})})
 
     def local(name, *args, cwd=None):
@@ -1235,7 +1240,7 @@ def s_ibridge():
           and not any(p.stat().st_mode & 0o077 for p in (home / 'rejected').rglob('*')), out)
     status_text = (vault / '_folderwise-sync-status.md').read_text()
     check('rejected phone edit is named in the status report', '## Phone edits not applied' in status_text and '_Folderwise Tasks/alpha.md' in status_text
-          and 'line 5' in status_text and 'only checkbox on/off changes are supported' in status_text, status_text)
+          and 'title edits are off' in status_text, status_text)
     rc, out = invoke('sync')
     check('a restored view is not reported again', rc == 0 and 'NOTICE' not in out, out)
     # Adapter lives in project, uses a CSV, and hides completed rows in normal Markdown.
@@ -1588,6 +1593,11 @@ def s_ibridge_rename():
     conf = home / 'config.json'
 
     def invoke(*args):
+        # Legacy fixtures exercise immediate transactions; settling has its own mobile tests.
+        if args and args[0] == 'sync' and conf.exists():
+            cfg = json.loads(conf.read_text())
+            cfg['edit_settle_seconds'] = 0
+            conf.write_text(json.dumps(cfg))
         return tool('icloud_bridge.py', '--config', conf, *args)
 
     def local(name, *args, cwd=None):
@@ -1635,8 +1645,8 @@ def s_ibridge_rename():
     # Renames are opt-in: the default keeps today's checkbox-only behavior.
     view = vault / '_Folderwise Tasks/alpha.md'
     invoke('sync')
-    check('rename sandbox exports a schema-2 state', json.loads((home / 'state.json').read_text()).get('schema') == 2)
-    check('views of projects without the setting say only toggles are imported', 'Only checkbox toggles are imported' in view.read_text())
+    check('rename sandbox exports a schema-3 state', json.loads((home / 'state.json').read_text()).get('schema') == 3)
+    check('views explain metadata support and the separate title-edit opt-in', 'metadata are imported; title edits are off' in view.read_text())
     view.write_text(view.read_text().replace('- [ ] Alpha one', '- [ ] Alpha renamed'))
     head = sh(['git', 'rev-parse', 'HEAD'], cwd=alpha)[1]
     rc, out = invoke('sync')
@@ -1688,11 +1698,15 @@ def s_ibridge_rename():
     rejected('a title cannot embed links', lambda s: s.replace('Beta two', 'Beta [x](http://example.com)'), 'links or images')
     rejected('an over-long title is rejected', lambda s: s.replace('Beta two', 'B' * 201), 'characters')
     rejected('invisible direction characters are rejected', lambda s: s.replace('Beta two', 'Beta \u202etwo'), 'direction')
-    rejected('removing the source link is rejected', lambda s: s.replace('Beta two ([source](../alpha/docs/checklist.md))', 'Beta two'), 'trailing source link')
-    rejected('a due date appended by the Tasks edit dialog is rejected', lambda s: s.replace('Beta two ([source](../alpha/docs/checklist.md))', 'Beta two ([source](../alpha/docs/checklist.md)) \U0001F4C5 2026-10-25'), 'trailing source link')
+    rejected('removing the source link is rejected', lambda s: re.sub(r'Beta two \(\[source\]\([^\n]+?\)\)', 'Beta two', s), 'source link')
+    view.write_text(re.sub(r'(Beta two \(\[source\]\([^\n]+?\)\))', r'\1 📅 2026-10-25', view.read_text()))
+    rc, out = invoke('sync')
+    check('a due date appended by the Tasks edit dialog imports', rc == 0 and 'Beta two 📅 2026-10-25' in note.read_text(), out)
+    view.write_text(view.read_text().replace(' 📅 2026-10-25', ''))
+    invoke('sync')
     rejected('a task whose title has links cannot be renamed from the view', lambda s: s.replace('See the docs now', 'See the docs soon'), 'links or images')
     rejected('duplicate tasks cannot be renamed', lambda s: s.replace('- [ ] Twin', '- [ ] Twin renamed', 1), 'share its title')
-    check('rejected text is saved on the Mac', sum(1 for p in (home / 'rejected').rglob('*') if p.is_file()) >= 10)
+    check('rejected text is saved on the Mac', sum(1 for p in (home / 'rejected').rglob('*') if p.is_file()) >= 9)
     check('restored views match the Mac again', 'Beta two' in view.read_text() and 'TMP' not in view.read_text())
     # A rename pending while the Mac renames the same task is a conflict.
     view.write_text(view.read_text().replace('Beta two', 'Beta phone'))
@@ -1749,7 +1763,7 @@ def s_ibridge_rename():
     csv_file.write_text(csv_file.read_text().replace('CSV renamed', 'CSV mac'))
     commit(source / 'beta', 'Rename CSV row on Mac')
     rc, out = invoke('sync')
-    check('an adapter rename pending during a Mac rename is a reported conflict', rc == 0 and 'its title also changed on the Mac' in out
+    check('an adapter rename pending during a Mac rename is a reported conflict', rc == 0 and 'description also changed on the Mac' in out
           and 'CSV mac' in beta_view.read_text(), out)
     gamma_view = vault / '_Folderwise Tasks/gamma.md'
     gamma_view.write_text(gamma_view.read_text().replace('CSV one', 'CSV nope'))
@@ -1811,6 +1825,11 @@ def s_ibridge_isolation():
     (fake / 'osacompile').chmod(0o755)
 
     def invoke(*args, extra=None):
+        # Legacy fixtures exercise immediate transactions; settling has its own mobile tests.
+        if args and args[0] == 'sync' and conf.exists():
+            cfg = json.loads(conf.read_text())
+            cfg['edit_settle_seconds'] = 0
+            conf.write_text(json.dumps(cfg))
         return tool('icloud_bridge.py', '--config', conf, *args, env={'PATH': str(fake) + os.pathsep + os.environ['PATH'], **(extra or {})})
 
     def local(name, *args, cwd=None):
@@ -2278,6 +2297,11 @@ def s_ibridge_status():
     (fake / 'osacompile').chmod(0o755)
 
     def invoke(*args, extra=None):
+        # Legacy fixtures exercise immediate transactions; settling has its own mobile tests.
+        if args and args[0] == 'sync' and conf.exists():
+            cfg = json.loads(conf.read_text())
+            cfg['edit_settle_seconds'] = 0
+            conf.write_text(json.dumps(cfg))
         return tool('icloud_bridge.py', '--config', conf, *args, env={'PATH': str(fake) + os.pathsep + os.environ['PATH'], **(extra or {})})
 
     def local(name, *args, cwd=None):
@@ -2555,6 +2579,478 @@ def s_ibridge_status():
     check('alerts carry no task or document text', 'PHONE-SECRET' not in banners() and all(l.startswith('Folderwise bridge needs attention.') for l in banners().splitlines() if l.strip()), banners())
 
 
+def s_ibridge_tasks():
+    """Tasks 8.6 serialization fixtures through real sync transactions, lint and hooks."""
+    root = CTX['root'] / 'tasks-compatibility'
+    source, vault, home = root / 'source', root / 'vault', root / 'state'
+    source.mkdir(parents=True)
+    for name in ('_tools', '_template'):
+        shutil.copytree(CTX['root'] / name, source / name, ignore=shutil.ignore_patterns('__pycache__'))
+    conf = home / 'config.json'
+
+    def local(name, *args, cwd=None):
+        return sh(['uv', 'run', '--quiet', str(source / '_tools' / name), *map(str, args)], cwd=cwd or source)
+
+    def invoke(*args):
+        return local('icloud_bridge.py', '--config', conf, *args)
+
+    local('new_project.py', '--name', 'alpha', '--description', 'Mobile compatibility fixtures', '--no-prompt')
+    project = source / 'alpha'
+    note = project / 'docs/mobile.md'
+    local('docs_new.py', 'docs/mobile.md', '--type', 'plan', '--title', 'Mobile tasks', '--by', 'human', cwd=project)
+    config = project / '.docs.yaml'
+    config.write_text(config.read_text() + '\nfolderwise-ibridgerename: true\nfolderwise-ibridgeedit: ["docs/mobile.md"]\n')
+    fixtures = ('- [ ] Parent\n  - [ ] Same child\n    continuation text\n  - [x] Same child\n'
+                '\t- [ ] Tab child\n  1. [ ] Number child\n  2) [ ] Paren child\n'
+                '  - Detail group\n    + [ ] Deep child\n> - [ ] Quoted\n> > - [ ] Callout child\n'
+                '- [ ] Ship ⏫ 📅 2026-11-01 #release ^ship\n'
+                '- [ ] Repeat 🔁 every day 📅 2026-11-01 🆔 oldid\n'
+                '- [ ] Remove 🏁 delete\n- [ ] Remove repeat 🔁 every day 📅 2026-11-01 🏁 delete\n'
+                '- [x] Finished ✅ 2026-10-25\n- [ ] Plain\n'
+                '- [ ] Linked [guide](mobile.md) 📅 2026-11-01\n'
+                '- [ ] Hard break 📅 2026-11-01  \n    continuation after hard break\n'
+                '    ```md\n    - [ ] Indented code example\n    ```\n'
+                '> - [ ] Quote with example\n>   ```md\n>   - [ ] Quoted code example\n>   ```\n'
+                '- [ ] Unknown [effort:: 2] 📅 2026-11-01\n-   [ ] Spaced marker\n')
+
+    def commit_mac():
+        local('docs_stamp.py', 'docs/mobile.md', '--by', 'human', '--summary', 'Update mobile fixtures', cwd=project)
+        sh(['git', 'add', '-A'], cwd=project)
+        return sh(['git', 'commit', '-qm', 'Update mobile fixtures'], cwd=project)
+
+    note.write_text(note.read_text().replace('## Change Log', '## Mobile fixtures\n\n' + fixtures + '\n## Change Log'))
+    commit_mac()
+    rc, out = invoke('setup', '--source', source, '--vault', vault, '--notifications', 'off', '--no-schedule')
+    check('task compatibility sandbox setup passes real project hooks', rc == 0, out)
+    invoke('configure', '--edit-settle-seconds', '0')
+    view = vault / '_Folderwise Tasks/alpha.md'
+
+    def row(name):
+        return next(line for line in view.read_text().splitlines(True) if re.search(r'\] ' + re.escape(name) + r' \(\[source\]', line))
+
+    def phone(name, transform):
+        text, old = view.read_text(), row(name)
+        view.write_text(text.replace(old, transform(old), 1))
+        return invoke('sync')
+
+    def head():
+        return sh(['git', 'rev-parse', 'HEAD'], cwd=project)[1]
+
+    # Reconstruct a genuine schema-2 flat view with the former text-derived identities.
+    state_path = home / 'state.json'
+    state = json.loads(state_path.read_text())
+    previous, mapping, legacy_lines, ordinals = {}, [], ['# alpha tasks', '', 'Legacy view', ''], {}
+    for task in sorted((t for k, t in state['tasks']['alpha'].items() if k.startswith('md:')), key=lambda t: t['line']):
+        identity = task['head'] + ' ] ' + task['title']
+        ordinal = ordinals.get(identity, 0)
+        ordinals[identity] = ordinal + 1
+        old_id = 'md:' + hashlib.sha256((task['path'] + '\0' + identity + '\0' + str(ordinal)).encode()).hexdigest()
+        previous[old_id] = {**task, 'id': old_id, 'identity': identity}
+        mapping.append(dict(line=len(legacy_lines), id=old_id, checked=task['checked']))
+        legacy_lines.append('- [' + ('x' if task['checked'] else ' ') + '] ' + task['title'] + ' ([source](../alpha/' + task['path'] + '))')
+    legacy = '\n'.join(legacy_lines) + '\n'
+    state['tasks']['alpha'] = {**previous, '_projection': mapping}
+    state['files']['_Folderwise Tasks/alpha.md'].update(text=legacy, hash=hashlib.sha256(legacy.encode()).hexdigest(), tasks=mapping)
+    state_path.write_text(json.dumps(state))
+    view.write_text(legacy.replace('- [ ] Plain', '- [x] Plain'))
+    rc, out = invoke('sync')
+    check('schema-2 pending toggles migrate against the exact source snapshot', rc == 0 and '- [x] Plain' in note.read_text() and '"fw:' in view.read_text(), out)
+    phone('Plain', lambda line: line.replace('[x]', '[ ]', 1))
+
+    check('task metadata follows the source link and block IDs remain last', re.search(r'Ship \(\[source\].*\) ⏫ 📅 2026-11-01 #release \^ship$', row('Ship').rstrip()) is not None)
+    check('projection task IDs are namespaced without changing source IDs', '🆔 fwview-oldid' in row('Repeat') and '🆔 oldid' in note.read_text())
+    mapped = json.loads(state_path.read_text())['tasks']['alpha']
+    check('quoted and list-indented fenced examples are never authoritative tasks',
+          not any('code example' in t.get('title', '') for t in mapped.values() if isinstance(t, dict)))
+    rc, out = phone('Linked guide', lambda line: line.replace('2026-11-01', '2026-11-02'))
+    check('metadata edits preserve the original Markdown link in a source description', rc == 0 and 'Linked [guide](mobile.md) 📅 2026-11-02' in note.read_text(), out)
+    rc, out = phone('Hard break', lambda line: line.replace('2026-11-01', '2026-11-02'))
+    check('task metadata edits preserve Markdown hard-break spaces and fenced continuation context', rc == 0 and 'Hard break 📅 2026-11-02  \n' in note.read_text() and '    ```md\n    - [ ] Indented code example\n    ```' in view.read_text(), out)
+    rc, out = phone('Hard break', lambda line: line.rstrip() + '\n')
+    check('an explicit hard-break removal imports without changing continuation text', rc == 0 and 'Hard break 📅 2026-11-02\n' in note.read_text() and 'continuation after hard break' in note.read_text(), out)
+    rc, out = phone('Unknown [effort:: 2]', lambda line: line.replace('2026-11-01', '2026-11-02'))
+    check('unrecognised inline metadata remains intact as description text', rc == 0 and 'Unknown [effort:: 2] 📅 2026-11-02' in note.read_text(), out)
+    rc, out = phone('Spaced marker', lambda line: line.replace('-   [ ]', '- [x]', 1).rstrip() + ' ✅ 2026-10-26\n')
+    check('plugin bullet-spacing normalization preserves original source spacing', rc == 0 and '-   [x] Spaced marker ✅ 2026-10-26' in note.read_text(), out)
+    check('task hierarchy preserves tabs, numbered children, non-task parents and continuation text',
+          all(s in view.read_text() for s in ('\t- [ ] Tab child', '  1. [ ] Number child', '  2) [ ] Paren child',
+                                             '  - Detail group\n    + [ ] Deep child', '    continuation text')))
+    for name, prefix in [('Same child', '  - '), ('Tab child', '\t- '), ('Number child', '  1. '),
+                         ('Paren child', '  2) '), ('Deep child', '    + '), ('Quoted', '> - '), ('Callout child', '> > - ')]:
+        rc, out = phone(name, lambda line: line.replace('[ ]', '[x]', 1))
+        check('nested or quoted checkbox round trip: ' + name, rc == 0 and prefix + '[x] ' + name in note.read_text(), out)
+    a, b = [line for line in view.read_text().splitlines(True) if '] Same child ' in line]
+    original, before = view.read_text(), head()
+    view.write_text(original.replace(a, 'ROWPLACEHOLDER\n', 1).replace(b, a, 1).replace('ROWPLACEHOLDER\n', b, 1))
+    rc, out = invoke('sync')
+    check('swapping repeated child rows cannot become unintended toggles', rc == 0 and 'reordering' in out and head() == before, out)
+
+    # Task metadata controls in the screenshot, plus lifecycle and dependency fields.
+    for suffix in ('📅 2026-11-02', '📆 2026-11-03', '🗓️ 2026-11-04', '🛫 2026-11-01',
+                   '⏳ 2026-11-02', '⌛ 2026-11-03', '➕ 2026-10-26', '⏫', '🔼', '🔽', '🔺', '⏬',
+                   '[due:: 2026-11-01]', '(start:: 2026-10-30)', '[scheduled:: 2026-10-31]',
+                   '[created:: 2026-10-26]', '[priority:: highest]', '[priority:: high]',
+                   '[priority:: medium]', '[priority:: low]', '[priority:: lowest]',
+                   '🆔 task1 ⛔ dep1, dep2', '[id:: task1] [dependsOn:: dep1, dep2]',
+                   '🔁 every week on Monday', '[repeat:: every 2 weeks]', '[onCompletion:: keep]'):
+        rc, out = phone('Plain', lambda line: re.sub(r'(\)\)).*\n$', r'\1 ' + suffix + '\n', line))
+        check('mobile task field imports: ' + suffix, rc == 0 and '- [x] Plain ' not in note.read_text() and 'Plain ' + suffix in note.read_text(), out)
+    rc, out = phone('Plain', lambda line: re.sub(r'(\)\)).*\n$', r'\1\n', line))
+    check('removing task metadata imports', rc == 0 and '- [ ] Plain\n' in note.read_text(), out)
+    for suffix, message in [('📅 2026-02-30', 'valid YYYY-MM-DD'), ('📅 tomorrow', 'valid YYYY-MM-DD'), ('📅 20261101', 'valid YYYY-MM-DD'),
+                            ('[priority:: urgent]', 'priority'), ('🆔 bad!id', 'task ID'),
+                            ('⛔ bad!id', 'dependencies'), ('🏁 explode', 'onCompletion'),
+                            ('🔁 every day?', 'recurrence'), ('📅 2026-11-01 📆 2026-11-02', 'duplicate task field')]:
+        before = head()
+        rc, out = phone('Plain', lambda line: line.rstrip() + ' ' + suffix + '\n')
+        check('invalid task metadata is saved and refused: ' + suffix, rc == 0 and message in out and head() == before, out)
+
+    rc, out = phone('Ship', lambda line: line.replace('Ship ', 'Ship renamed ', 1))
+    check('description rename preserves dates priority tags and block IDs', rc == 0 and 'Ship renamed ⏫ 📅 2026-11-01 #release ^ship' in note.read_text(), out)
+    rc, out = phone('Ship renamed', lambda line: line.replace('#release', '#mobile #work'))
+    check('task tags can change without dropping dates priority or block IDs', rc == 0 and '📅 2026-11-01 #mobile #work ^ship' in note.read_text(), out)
+    view.write_text(view.read_text().replace('#mobile #work', '#phone'))
+    note.write_text(note.read_text().replace('#mobile #work', '#mac'))
+    commit_mac()
+    before = head()
+    rc, out = invoke('sync')
+    check('concurrent tag disagreements preserve the source and save the phone edit', rc == 0 and 'tags also changed on the Mac' in out and head() == before, out)
+    rc, out = phone('Plain', lambda line: line.replace('Plain ', 'Plain 🔺 important ', 1))
+    check('priority emoji in prose remains description text', rc == 0 and 'Plain 🔺 important' in note.read_text(), out)
+    phone('Plain 🔺 important', lambda line: line.replace('Plain 🔺 important', 'Plain'))
+    before = head()
+    rc, out = phone('Plain', lambda line: line.replace('] Plain', ']Plain'))
+    check('a malformed checkbox cannot acquire authoritative ownership', rc == 0 and 'keep the checkbox' in out and head() == before, out)
+    rc, out = phone('Plain', lambda line: line.replace('Plain ', '👩‍💻 Plain ', 1))
+    check('mobile titles allow joined emoji without allowing bidi controls', rc == 0 and '👩‍💻 Plain' in note.read_text(), out)
+    phone('👩‍💻 Plain', lambda line: line.replace('👩‍💻 Plain', 'Plain'))
+    for status in ('/', '-', '!', 'D'):
+        data = vault / '.obsidian/plugins/obsidian-tasks-plugin/data.json'
+        options = json.loads(data.read_text())
+        options['statusSettings'] = dict(customStatuses=[dict(symbol='!', type='TODO'), dict(symbol='D', type='DONE')])
+        data.write_text(json.dumps(options))
+        rc, out = phone('Plain', lambda line: re.sub(r'\[.\]', '[' + status + ']', line, count=1))
+        check('configured custom status is preserved: ' + status, rc == 0 and '- [' + status + '] Plain' in note.read_text(), out)
+    phone('Plain', lambda line: line.replace('[D]', '[ ]', 1))
+    before = head()
+    rc, out = phone('Plain', lambda line: line.replace('[ ]', '[?]', 1))
+    check('unknown status has an actionable rejection', rc == 0 and 'configure its type' in out and head() == before, out)
+    rc, out = phone('Plain', lambda line: line.replace('[ ]', '[x]', 1).rstrip() + ' ✅ 2026-10-26\n')
+    check('plugin completion with an automatic done date imports atomically', rc == 0 and '- [x] Plain ✅ 2026-10-26' in note.read_text(), out)
+    rc, out = phone('Plain', lambda line: line.replace('[x]', '[ ]', 1))
+    check('reopening a task clears stale completion metadata', rc == 0 and '- [ ] Plain\n' in note.read_text(), out)
+    rc, out = phone('Plain', lambda line: line.replace('[ ]', '[-]', 1).rstrip() + ' ❌ 2026-10-26\n')
+    check('plugin cancellation with its date imports', rc == 0 and '- [-] Plain ❌ 2026-10-26' in note.read_text(), out)
+    phone('Plain', lambda line: line.replace('[-]', '[ ]', 1).replace(' ❌ 2026-10-26', ''))
+    rc, out = phone('Plain', lambda line: line.replace('[ ]', '[x]', 1).rstrip() + ' [completion:: 2026-10-26]\n')
+    check('Dataview lifecycle fields import', rc == 0 and '[completion:: 2026-10-26]' in note.read_text(), out)
+    phone('Plain', lambda line: line.replace('[x]', '[ ]', 1).replace(' [completion:: 2026-10-26]', ''))
+
+    # Actual Tasks recurrence shape: next row first, completed row second; new IDs are removed.
+    def recur(line):
+        next_row = line.replace('📅 2026-11-01', '📅 2026-11-02').replace(' 🆔 fwview-oldid', '')
+        completed = line.replace('[ ]', '[x]', 1).rstrip() + ' ✅ 2026-11-01\n'
+        return next_row + completed
+    prior_recurrence_state = state_path.read_bytes()
+    prior_recurrence_view = view.read_text().replace(row('Repeat'), recur(row('Repeat')))
+    rc, out = phone('Repeat', recur)
+    check('recurrence creates its next occurrence and completes the original atomically', rc == 0 and
+          '- [ ] Repeat 🔁 every day 📅 2026-11-02\n' in note.read_text() and
+          '- [x] Repeat 🔁 every day 📅 2026-11-01 🆔 oldid ✅ 2026-11-01' in note.read_text(), out)
+    before = head()
+    invoke('sync')
+    check('replaying a recurring sync creates no duplicate occurrence or commit', head() == before and note.read_text().count('- [ ] Repeat ') == 1)
+    state_path.write_bytes(prior_recurrence_state)
+    for key, entry in json.loads(prior_recurrence_state)['files'].items():
+        if 'text' in entry:
+            (vault / key).write_text(entry['text'])
+    view.write_text(prior_recurrence_view)
+    rc, out = invoke('sync')
+    check('recurrence replay after a published commit and lost export state creates no duplicate', rc == 0 and head() == before and note.read_text().count('- [ ] Repeat ') == 1, out)
+    rc, out = phone('Remove', lambda line: '')
+    check('explicit on-completion delete removes only its authoritative task line', rc == 0 and '- [ ] Remove 🏁' not in note.read_text() and 'Remove repeat' in note.read_text(), out)
+    rc, out = phone('Remove repeat', lambda line: line.replace('2026-11-01', '2026-11-02'))
+    check('recurrence with on-completion delete keeps just the next occurrence', rc == 0 and note.read_text().count('Remove repeat 🔁') == 1 and '2026-11-02 🏁 delete' in note.read_text(), out)
+
+    # Independent metadata fields merge; same-field disagreements preserve the phone save.
+    original = row('Plain')
+    view.write_text(view.read_text().replace(original, original.rstrip() + ' 📅 2026-11-05\n'))
+    note.write_text(note.read_text().replace('- [ ] Plain\n', '- [ ] Plain 🔼\n'))
+    commit_mac()
+    rc, out = invoke('sync')
+    check('independent Mac priority and phone due-date edits merge', rc == 0 and 'Plain 🔼 📅 2026-11-05' in note.read_text(), out)
+    view.write_text(view.read_text().replace('📅 2026-11-05', '📅 2026-11-06'))
+    note.write_text(note.read_text().replace('📅 2026-11-05', '📅 2026-11-07'))
+    commit_mac()
+    before = head()
+    rc, out = invoke('sync')
+    check('same-field concurrent edits are rejected with recovery text retained', rc == 0 and 'due also changed on the Mac' in out and head() == before and list((home / 'rejected').rglob('*.md')), out)
+
+    runtime = json.loads((CTX['tools'] / 'fixtures/obsidian_tasks_8_6_0.json').read_text())
+    runtime_results = []
+    for case in runtime['cases']:
+        text = re.sub(r'^- \[.\] Fixture.*\n', '', note.read_text(), flags=re.M)
+        source_line = case['before'].replace(' __SOURCE__', '') + '\n'
+        note.write_text(text.replace('## Change Log', source_line + '\n## Change Log'))
+        commit_mac()
+        invoke('sync')
+        old = row('Fixture')
+        link = re.search(r'\(\[source\]\([^\n]+?\)\)', old)[0]
+        new = ''.join(line.replace('__SOURCE__', link) + '\n' for line in case['after'])
+        view.write_text(view.read_text().replace(old, new))
+        rc, out = invoke('sync')
+        actual = [line for line in note.read_text().splitlines() if re.match(r'^- \[.\] Fixture(?: |$)', line)]
+        expected = [line.replace(' __SOURCE__', '') for line in case['after']]
+        ok = rc == 0 and actual == expected
+        runtime_results.append(ok)
+        check('pinned upstream output imports: ' + case['name'], ok, out + repr(actual) + repr(expected))
+        before = head()
+        invoke('sync')
+        check('pinned upstream output is idempotent: ' + case['name'], head() == before)
+    check('pinned Tasks runtime fixtures round trip through the CLI', len(runtime_results) == 22 and all(runtime_results))
+
+    # Copied-note metadata needs no broad edit permission. Structural edits use the note opt-in.
+    mirror = vault / 'alpha/docs/mobile.md'
+    mirror.write_text(mirror.read_text().replace('- [ ] Plain ', '- [ ] Plain 🛫 2026-11-01 ', 1))
+    rc, out = invoke('sync')
+    check('copied-note metadata edits use task mappings', rc == 0 and any('Plain ' in line and '🛫 2026-11-01' in line for line in note.read_text().splitlines()), out)
+    invoke('configure', '--text-edits', 'on')
+    mirror.write_text(mirror.read_text().replace('- [ ] Parent\n', '- [ ] Parent\n  - [ ] Mobile child\n'))
+    invoke('sync')
+    rc, out = invoke('sync')
+    check('creating a child in an editable copied note refreshes the task inventory', rc == 0 and '  - [ ] Mobile child' in note.read_text() and 'Mobile child' in view.read_text(), out)
+    rc, out = phone('Mobile child', lambda line: line.replace('[ ]', '[x]', 1))
+    check('a newly created child can be toggled through the dashboard', rc == 0 and '  - [x] Mobile child' in note.read_text(), out)
+    mirror.write_text(mirror.read_text().replace('  - [x] Mobile child\n', '    - [x] Mobile child\n'))
+    invoke('sync')
+    rc, out = invoke('sync')
+    check('reparenting a child through an editable copied note preserves the new indentation', rc == 0 and '    - [x] Mobile child' in note.read_text(), out)
+    mirror.write_text(mirror.read_text().replace('    - [x] Mobile child\n', ''))
+    invoke('sync')
+    rc, out = invoke('sync')
+    check('deleting a child through an editable copied note refreshes the dashboard', rc == 0 and 'Mobile child' not in note.read_text() and 'Mobile child' not in view.read_text(), out)
+
+    # Simulate an iCloud write during the real commit hook: the prepared commit must not publish.
+    hook = project / '.git/hooks/pre-commit'
+    hook_text = hook.read_text()
+    writer = root / 'cloud-writer.py'
+    writer.write_text('from pathlib import Path\np=Path(' + repr(str(view)) + ')\np.write_text(p.read_text().replace("Before guard", "After guard"))\n')
+    hook.write_text('#!/bin/sh\n' + sys.executable + ' ' + str(writer) + '\n' + hook_text.split('\n', 1)[1])
+    before = head()
+    rc, out = phone('Plain', lambda line: line.replace('Plain ', 'Before guard ', 1))
+    check('a phone write during the commit hook aborts publication and preserves final phone bytes', rc == 1 and 'vault changed during import' in out and head() == before and 'After guard' in view.read_text(), out)
+    hook.write_text(hook_text)
+    rc, out = invoke('sync')
+    check('the next run imports the final phone save after the writer stops', rc == 0 and 'After guard' in note.read_text() and 'Before guard' not in note.read_text(), out)
+    phone('After guard', lambda line: line.replace('After guard', 'Plain'))
+
+    # Typing is observed across runs; no partial title or temporary malformed row is restored.
+    invoke('configure', '--edit-settle-seconds', '3600')
+    original, before = row('Plain'), head()
+    view.write_text(view.read_text().replace(original, original.replace('Plain ', 'Part ', 1)))
+    rc, out = invoke('sync')
+    check('generated-view partial titles wait without a commit', rc == 0 and head() == before and '] Part ' in view.read_text(), out)
+    mirror.write_text(mirror.read_text().replace('- [ ] Parent\n', '- [x] Parent\n'))
+    rc, out = invoke('sync')
+    check('other imports in the same project wait while its generated view is being edited', rc == 0 and head() == before and '- [ ] Parent\n' in note.read_text(), out)
+    view.write_text(view.read_text().replace('] Part ', '] Final title '))
+    invoke('sync')
+    pending = home / 'pending.json'
+    data = json.loads(pending.read_text())
+    for entry in data.values():
+        entry['since'] -= 4000
+    pending.write_text(json.dumps(data))
+    rc, out = invoke('sync')
+    check('only the settled final title is committed', rc == 0 and 'Final title' in note.read_text() and '- [ ] Part ' not in note.read_text() and '- [x] Parent\n' in note.read_text(), out)
+    text, before = view.read_text(), head()
+    view.write_text(text.replace(row('Final title'), '- [ ] Incomplete source link\n'))
+    rc, out = invoke('sync')
+    check('a temporarily missing source link waits before rejection or restoration', rc == 0 and 'Incomplete source link' in view.read_text() and head() == before, out)
+    view.write_text(text)
+    invoke('sync')
+    check('finishing a temporary edit clears the pending observation', not json.loads(pending.read_text()))
+    view.write_text(text.replace(row('Final title'), '- [ ] Incomplete source link\n'))
+    invoke('sync')
+    data = json.loads(pending.read_text())
+    for entry in data.values():
+        entry['since'] -= 4000
+    pending.write_text(json.dumps(data))
+    rc, out = invoke('sync')
+    check('a settled malformed view is saved before restoration', rc == 0 and 'Incomplete source link' not in view.read_text() and head() == before, out)
+
+    # Both formats/settings are diagnosed without changing the user's settings.
+    manifest = vault / '.obsidian/plugins/obsidian-tasks-plugin/manifest.json'
+    manifest.write_text('{"version":"8.6.0"}')
+    rc, out = invoke('doctor')
+    check('doctor reports the installed Tasks version and supported lifecycle dates', rc == 0 and 'Tasks version: 8.6.0' in out and 'lifecycle dates supported' in out, out)
+    settings_path = manifest.with_name('data.json')
+    options = json.loads(settings_path.read_text())
+    options.update(globalFilter='#private', taskFormat='dataview', setDoneDate=True)
+    settings_path.write_text(json.dumps(options))
+    manifest.write_text('{"version":"99.0.0"}')
+    rc, out = invoke('doctor')
+    check('doctor warns about filters and unverified versions while preserving settings', rc == 0 and 'globalFilter' in out and 'differs' in out and json.loads(settings_path.read_text()) == options, out)
+    options['taskFormat'] = 'unknown'
+    settings_path.write_text(json.dumps(options))
+    rc, out = invoke('doctor')
+    check('doctor rejects an unsupported Tasks serialization format', rc == 1 and 'taskFormat' in out, out)
+    for invalid, message in [([], 'JSON object'), ({'statusSettings': []}, 'must be an object'),
+                             ({'statusSettings': {'customStatuses': {}}}, 'must be lists'),
+                             ({'statusSettings': {'customStatuses': [{'symbol': 5, 'type': 'DONE'}]}}, 'invalid Tasks status')]:
+        settings_path.write_text(json.dumps(invalid))
+        rc, out = invoke('doctor')
+        check('malformed plugin settings are diagnosed: ' + message, rc == 1 and message in out, out)
+
+
+def s_ibridge_rich_adapter():
+    """A schema-owning adapter must explicitly implement each rich task capability."""
+    root = CTX['root'] / 'rich-adapter'
+    source, vault, home = root / 'source', root / 'vault', root / 'state'
+    source.mkdir(parents=True)
+    for name in ('_tools', '_template'):
+        shutil.copytree(CTX['root'] / name, source / name, ignore=shutil.ignore_patterns('__pycache__'))
+    conf = home / 'config.json'
+
+    def local(name, *args, cwd=None):
+        return sh(['uv', 'run', '--quiet', str(source / '_tools' / name), *map(str, args)], cwd=cwd or source)
+
+    def invoke(*args):
+        return local('icloud_bridge.py', '--config', conf, *args)
+
+    local('new_project.py', '--name', 'alpha', '--description', 'Rich adapter fixture', '--no-prompt')
+    project = source / 'alpha'
+    local('docs_new.py', 'docs/tasks.md', '--type', 'plan', '--title', 'Adapter tasks', '--by', 'human', cwd=project)
+    cfg = project / '.docs.yaml'
+    cfg.write_text(cfg.read_text() + '\nfolderwise-ibridgerename: true\n')
+    note, records = project / 'docs/tasks.md', project / 'data/tasks.json'
+    records.parent.mkdir(exist_ok=True)
+    caps = ['title', 'due', 'status', 'recurrence', 'delete', 'done']
+    rows = [dict(id=str(i), title=title, status=' ', editable=editable) for i, (title, editable) in enumerate([
+        ('Adapter', caps), ('Adapter repeat 🔁 every day 📅 2026-11-01', caps),
+        ('Adapter delete 🏁 delete', caps), ('Limited', []), ('Limited repeat 🔁 every day 📅 2026-11-01', ['due', 'done']),
+        ('Limited delete 🏁 delete', []), ('Control', caps)])]
+    records.write_text(json.dumps(dict(rows=rows, ignore_status=False, ignore_title=False, ignore_create=False, ignore_delete=False)))
+    note.write_text(note.read_text().replace('## Change Log', '<!-- tasks:start -->\n<!-- tasks:end -->\n\n## Change Log'))
+    script = project / 'scripts/adapter.py'
+    script.parent.mkdir(exist_ok=True)
+    script.write_text('''import json,sys
+from pathlib import Path
+sys.path.insert(0,str(Path.cwd().parent/'_tools'))
+import ibridge_tasks as fmt
+p=Path('data/tasks.json');data=json.loads(p.read_text());rows=data['rows'];op=sys.argv[1]
+def done(status): return status in ('x','X','D')
+def block(): return '<!-- tasks:start -->\\n'+''.join('- ['+r['status']+'] '+r['title']+'\\n' for r in rows if not done(r['status']))+'<!-- tasks:end -->'
+if op=='list':
+ print(json.dumps([dict(r,checked=done(r['status']),path='docs/tasks.md') for r in rows]))
+elif op=='apply':
+ for c in json.load(sys.stdin):
+  r=next(r for r in rows if r['id']==c['id'])
+  if 'expected_title' in c: assert r['title']==c['expected_title']
+  if 'expected_fields' in c: assert fmt.fields(r['title'])['fields']==c['expected_fields']
+  if c.get('delete'):
+   if not data['ignore_delete']: rows.remove(r)
+   continue
+  if 'title' in c and not data['ignore_title']: r['title']=c['title']
+  if not data['ignore_status']:
+   r['status']=c.get('status',('x' if c['checked'] else ' ') if done(r['status'])!=c['checked'] else r['status'])
+  if 'recurrence' in c and not data['ignore_create']:
+   for nextrow in c['recurrence']:
+    if not done(nextrow['status']): rows.append(dict(nextrow,id=r['id']+'-next',editable=r['editable']))
+ p.write_text(json.dumps(data))
+ note=Path('docs/tasks.md');text=note.read_text();a=text.index('<!-- tasks:start -->');b=text.index('<!-- tasks:end -->')+len('<!-- tasks:end -->');note.write_text(text[:a]+block()+text[b:])
+elif op=='validate':
+ text=Path('docs/tasks.md').read_text();assert block() in text
+''')
+
+    def commit():
+        local('docs_stamp.py', 'docs/tasks.md', '--by', 'human', '--summary', 'Adapter fixture', cwd=project)
+        sh(['git', 'add', '-A'], cwd=project)
+        return sh(['git', 'commit', '-qm', 'Update adapter fixture'], cwd=project)
+
+    # Generate the initial block through the same project-owned code.
+    text = note.read_text().replace('<!-- tasks:start -->\n<!-- tasks:end -->', '<!-- tasks:start -->\n' + ''.join('- [ ] ' + r['title'] + '\n' for r in rows) + '<!-- tasks:end -->')
+    note.write_text(text)
+    commit()
+    invoke('setup', '--source', source, '--vault', vault, '--notifications', 'off', '--no-schedule')
+    options = json.loads(conf.read_text())
+    options.update(adapters={'alpha': [sys.executable, 'scripts/adapter.py']}, edit_settle_seconds=0)
+    conf.write_text(json.dumps(options))
+    invoke('sync')
+    view = vault / '_Folderwise Tasks/alpha.md'
+
+    def phone(name, transform):
+        old = next(line for line in view.read_text().splitlines(True) if '] ' + name + ' ([source]' in line)
+        view.write_text(view.read_text().replace(old, transform(old), 1))
+        return invoke('sync')
+
+    def head():
+        return sh(['git', 'rev-parse', 'HEAD'], cwd=project)[1]
+
+    rc, out = phone('Adapter', lambda line: line.rstrip() + ' 📅 2026-11-05\n')
+    check('a rich adapter receives and validates typed metadata fields', rc == 0 and json.loads(records.read_text())['rows'][0]['title'] == 'Adapter 📅 2026-11-05', out)
+    rc, out = phone('Adapter', lambda line: line.replace('[ ]', '[/]', 1))
+    check('a rich adapter imports configured status characters', rc == 0 and json.loads(records.read_text())['rows'][0]['status'] == '/', out)
+
+    def repeat(line):
+        return line.replace('2026-11-01', '2026-11-02') + line.replace('[ ]', '[x]', 1).rstrip() + ' ✅ 2026-11-01\n'
+
+    prior_state = (home / 'state.json').read_bytes()
+    old_view = view.read_text()
+    old_row = next(line for line in old_view.splitlines(True) if '] Adapter repeat ([source]' in line)
+    prior_view = old_view.replace(old_row, repeat(old_row))
+    rc, out = phone('Adapter repeat', repeat)
+    check('a rich adapter creates exactly one next occurrence', rc == 0 and len([r for r in json.loads(records.read_text())['rows'] if r['title'].startswith('Adapter repeat')]) == 2, out)
+    before = head()
+    invoke('sync')
+    check('rich adapter recurrence is idempotent', head() == before)
+    (home / 'state.json').write_bytes(prior_state)
+    for key, entry in json.loads(prior_state)['files'].items():
+        if 'text' in entry:
+            (vault / key).write_text(entry['text'])
+    view.write_text(prior_view)
+    rc, out = invoke('sync')
+    check('adapter recurrence recovers a published commit with lost export state exactly once', rc == 0 and head() == before and len([r for r in json.loads(records.read_text())['rows'] if r['title'].startswith('Adapter repeat')]) == 2, out)
+    rc, out = phone('Adapter delete', lambda line: '')
+    check('a rich adapter can explicitly delete a completed record', rc == 0 and not any(r['title'].startswith('Adapter delete') for r in json.loads(records.read_text())['rows']), out)
+    for name, transform, message in [
+        ('Limited', lambda line: line.rstrip() + ' 📅 2026-11-05\n', 'does not allow these task fields: due'),
+        ('Limited', lambda line: line.replace('[ ]', '[/]', 1), 'does not allow custom status'),
+        ('Limited repeat', repeat, 'does not allow recurrence creation'),
+        ('Limited delete', lambda line: '', 'does not allow on-completion deletion')]:
+        before = head()
+        rc, out = phone(name, transform)
+        check('adapter capability boundary: ' + message, rc == 0 and message in out and head() == before, out)
+    for option, name, transform, message in [
+        ('ignore_status', 'Adapter', lambda line: line.replace('[/]', '[-]', 1), 'did not apply the requested status'),
+        ('ignore_title', 'Adapter', lambda line: line.replace('2026-11-05', '2026-11-06'), 'did not apply the requested title'),
+        ('ignore_create', 'Limited repeat', repeat, 'did not create exactly one next occurrence'),
+        ('ignore_delete', 'Limited delete', lambda line: '', 'did not delete the completed task')]:
+        data = json.loads(records.read_text())
+        data[option] = True
+        for r in data['rows']:
+            if r['title'].startswith(name):
+                r['editable'] = caps
+        records.write_text(json.dumps(data))
+        commit()
+        invoke('sync')
+        before = head()
+        rc, out = phone(name, transform)
+        check('an adapter that ignores a rich operation cannot publish: ' + option, rc == 1 and message in out and head() == before, out)
+        saved = json.loads((home / 'state.json').read_text())['files']['_Folderwise Tasks/alpha.md']['text']
+        view.write_text(saved)
+        data = json.loads(records.read_text())
+        data[option] = False
+        records.write_text(json.dumps(data))
+        commit()
+        invoke('sync')
+    plugin = vault / '.obsidian/plugins/obsidian-tasks-plugin/data.json'
+    check('rich adapter imports preserve an unrelated authoritative record',
+          [r for r in json.loads(records.read_text())['rows'] if r['title'] == 'Control'] == [rows[-1]])
+    data = json.loads(plugin.read_text()); data['setCancelledDate'] = True; plugin.write_text(json.dumps(data))
+    rc, out = invoke('doctor')
+    check('doctor diagnoses automatic dates unsupported by an adapter', rc == 1 and 'adapter lacks cancelled capability' in out, out)
+
+
 def s_ibridge_setup():
     """Verify explicit vault setup, persistent project defaults, and safe uninstall."""
     root=CTX['root']/'obsidian-setup-sandbox';source=root/'source';source.mkdir(parents=True)
@@ -2691,7 +3187,7 @@ SECTIONS = [
     ("create", s_create), ("new_doc", s_new_doc_and_index), ("stamp", s_stamp_and_hook), ("hook", s_hook_fail_closed),
     ("lint", s_lint_rules), ("timezone", s_timezone), ("links", s_links), ("staged_source", s_staged_source), ("markdown_fences", s_markdown_fences), ("toc", s_toc), ("mv", s_mv),
     ("tables", s_tables), ("stale", s_stale_index_recent), ("sync", s_sync),
-    ("ibridge", s_ibridge), ("ibridge_rename", s_ibridge_rename), ("ibridge_isolation", s_ibridge_isolation), ("ibridge_notes", s_ibridge_notes), ("ibridge_transient", s_ibridge_transient), ("ibridge_status", s_ibridge_status), ("ibridge_setup", s_ibridge_setup), ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache),
+    ("ibridge_tasks", s_ibridge_tasks), ("ibridge_rich_adapter", s_ibridge_rich_adapter), ("ibridge", s_ibridge), ("ibridge_rename", s_ibridge_rename), ("ibridge_isolation", s_ibridge_isolation), ("ibridge_notes", s_ibridge_notes), ("ibridge_transient", s_ibridge_transient), ("ibridge_status", s_ibridge_status), ("ibridge_setup", s_ibridge_setup), ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache),
     ("framework_checkout", s_framework_checkout), ("framework_index", s_framework_index), ("ci_allowlist", s_ci_allowlist),
 ]
 

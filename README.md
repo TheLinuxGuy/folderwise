@@ -108,6 +108,8 @@ Every tool, flag and setting is documented in the [full guide](docs/guide.md).
 
 Browse your docs in Obsidian and manage every project’s tasks from one iPhone dashboard. Check off a task on your phone (or, once a project opts in, rename it or edit selected notes); your Mac updates the source files and commits the change while keeping your repositories outside iCloud. [Set up Obsidian + iCloud →](docs/obsidian.md) · [Bridge test cases and iPhone acceptance checklist](docs/ibridge-testing.md)
 
+The iPhone bridge supports nested and quoted tasks, Tasks dates/priorities and custom statuses, and plugin-generated recurrence. See the [task compatibility and acceptance requirements](docs/obsidian.md#task-format-compatibility).
+
 **🔔 Mac alerts when sync needs attention.** Receive setup confirmations and alerts for detected sync issues. Open your vault’s [_folderwise-sync-status.md](docs/obsidian.md#bridge-status-report) for details.
 
 <p align="center">
