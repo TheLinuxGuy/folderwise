@@ -1274,6 +1274,8 @@ elif op=='validate':
     cfg = json.loads(conf.read_text());cfg['adapters']={'alpha':[sys.executable,'scripts/adapter.py']};conf.write_text(json.dumps(cfg))
     invoke('sync')
     check('generated checkbox appears once in dashboard projection', view.read_text().count('CSV action') == 1)
+    check('a boolean-only adapter view does not promise metadata or title edits', 'Only checkbox toggles are imported for this adapter-backed project' in view.read_text()
+          and 'statuses and metadata are imported' not in view.read_text())
     view.write_text(view.read_text().replace('- [ ] CSV action', '- [x] CSV action'))
     rc, out = invoke('sync')
     check('CSV task toggle updates authoritative row and regenerates Markdown', rc == 0 and 'item-1,CSV action,true' in (alpha / 'data/tasks.csv').read_text()
@@ -2276,6 +2278,19 @@ def s_ibridge_transient():
     check('a locked run never removes exported files', sorted(p.relative_to(vault).as_posix() for p in vault.rglob('*') if p.is_file() and '.obsidian' not in p.parts) == files_before)
     rc, out = tool('icloud_bridge.py', '--config', conf, 'sync')
     check('a normal run clears the deferral counter', rc == 0 and 'deferred' not in json.loads((home / 'last-run.json').read_text()), out)
+    # The real lock appears while hashing an exported vault file, not in the whole-run helper mocked above.
+    code = ("import errno, sys\nfrom pathlib import Path\nsys.path.insert(0, %r)\nimport icloud_bridge as bridge\n"
+            "vault = Path(%r)\noriginal = bridge.existing_hash\n"
+            "def flaky(path):\n    if Path(path).name == 'README.md' and Path(path).is_relative_to(vault):\n        raise OSError(errno.EDEADLK, 'Resource deadlock avoided')\n    return original(path)\n"
+            "bridge.existing_hash = flaky\nsys.argv = ['icloud_bridge.py', '--config', %r, 'sync']\nsys.exit(bridge.main())\n") % (str(source / '_tools'), str(vault), str(conf))
+    for number in (1, 2):
+        rc, out = locked_run()
+        check(f'a lock while hashing a vault file is deferred quietly (run {number})', rc == 0 and 'Deferred: iCloud is busy' in out
+              and json.loads((home / 'last-run.json').read_text()).get('deferred') == number, out)
+    rc, out = locked_run()
+    check('the third consecutive vault-file lock failure is reported', rc == 1 and 'Resource deadlock avoided' in out, out)
+    rc, out = tool('icloud_bridge.py', '--config', conf, 'sync')
+    check('a normal run after vault-file locks clears the deferral counter', rc == 0 and 'deferred' not in json.loads((home / 'last-run.json').read_text()), out)
 
 
 def s_ibridge_status():

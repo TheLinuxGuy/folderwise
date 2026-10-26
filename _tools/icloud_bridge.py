@@ -396,6 +396,8 @@ def inventory(settings, selected_projects=None, failed=None):
             can_rename = cfg.get("folderwise-ibridgerename", False)
             note = ("Generated task view. Checkbox toggles, statuses, metadata and title edits are imported; keep source links before metadata."
                     if can_rename else "Generated task view. Checkbox toggles, statuses and metadata are imported; title edits are off for this project.")
+            if project.name in settings.get("adapters", {}) and not any(t.get("editable") for t in local_tasks):
+                note = "Generated task view. Only checkbox toggles are imported for this adapter-backed project; metadata, status and title edits are rejected."
             projection = [f"# {project.name} tasks", "", note, ""]
             mapping = []
             emitted, last_path = set(), None
@@ -745,8 +747,8 @@ def requests(vault, state, renames=frozenset(), failures=None, editors=None, qui
                 failures.setdefault(project, f"{key}: {exc}")
             continue
         except (ValueError, OSError) as exc:
-            if failures is None or project is None:
-                raise
+            if failures is None or project is None or transient(exc):
+                raise  # a brief iCloud lock defers the whole run instead of holding the project
             failures.setdefault(project, f"{key}: {exc}")
             continue
         sources.setdefault(project, set()).add(key)
@@ -1082,9 +1084,14 @@ def resolve(settings, home, key=None):
     return 0
 
 
+def transient(exc):
+    """A brief operating-system lock, typically iCloud syncing a file."""
+    return isinstance(exc, OSError) and exc.errno in TRANSIENT
+
+
 def deferrable(home, exc):
     """True, and recorded, for a brief iCloud file lock; the third consecutive failure is reported."""
-    if not (isinstance(exc, OSError) and exc.errno in TRANSIENT):
+    if not transient(exc):
         return False
     last = read_json(home / "last-run.json", {})
     if last.get("deferred", 0) >= 2:
@@ -1318,7 +1325,7 @@ def sync(settings, home, dry=False):
                 snapshot[key] = existing_hash(safe(vault, key))
             except (ValueError, OSError) as exc:
                 name = owner(key)
-                if name is None:
+                if name is None or transient(exc):
                     raise
                 held[name] = f"{key}: {exc}"
         renames = {p.name for p, cfg in active.items() if cfg.get("folderwise-ibridgerename", False)}
