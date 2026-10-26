@@ -106,9 +106,9 @@ Every tool, flag and setting is documented in the [full guide](docs/guide.md).
 <sub>Obsidian demo with fictional notes. Cross-project links shown are demo-only; Folderwise currently validates links within each repository.</sub>
 
 
-Obsidian adds search, backlinks, and visual navigation over your files. Obsidian is opt-in: run the bridge setup to initialize vault defaults and enable sync for existing and future projects. The optional iCloud bridge adds a central iPhone task dashboard, completed-task reopening, automatic local commits on Mac, storage controls, and macOS notifications with the Folderwise logo. Your repositories stay outside iCloud. Scheduled sync appears as `folderwise-ibridgesync` in macOS Login Items. A repeatable notification test and visibility troubleshooting cover macOS Focus and screen-sharing controls. [Read the setup guide →](docs/obsidian.md)
+Browse your docs in Obsidian and manage every project’s tasks from one iPhone dashboard. Check off a task on your phone; your Mac updates the source files and commits the change while keeping your repositories outside iCloud. [Set up Obsidian + iCloud →](docs/obsidian.md)
 
-**🔔 Mac alerts when sync needs attention.** Receive branded notifications for setup and newly detected conflicts, failed imports, or image-budget omissions. Open `Bridge Status.md` for details.
+**🔔 Mac alerts when sync needs attention.** Receive setup confirmations and alerts for detected sync issues. Open your vault’s [Bridge Status.md](docs/obsidian.md#bridge-status-report) for details.
 
 <p align="center">
   <img src="docs/assets/ibridge-macos-notification.png" alt="Folderwise iBridge setup notification on macOS confirming that sync is scheduled every five minutes" width="364">

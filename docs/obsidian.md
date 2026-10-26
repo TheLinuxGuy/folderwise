@@ -137,6 +137,10 @@ uv run _tools/icloud_bridge.py configure --mode full
 
 Limits apply to individual images and all selected images across enabled projects. `null` means unlimited; `0` means zero bytes. Markdown/tasks are never omitted to satisfy an image limit. Selection is deterministic in project/path order: reject oversized files, include images that fit, skip one that does not fit and continue to smaller later images. Repeated references to the same path count once. Original image bytes and document references are preserved.
 
+### Bridge status report
+
+The generated `Bridge Status.md` lives at the root of your iCloud vault. It lists sync issues and gives you details to investigate a notification.
+
 `Bridge Status.md` lists omitted files, sizes and reasons, including configured-limit omissions and missing/untracked referenced images. It reports selected export bytes, selected image bytes, and currently present managed payload bytes, **not** account free space or an iCloud bill. Current payload size excludes generated status/settings and unowned files, and can exceed the new selection when a conflict prevents cleanup. Obsidian plugins, unrelated vault files, iCloud retention and other account data can consume additional storage. Lowering limits removes only unchanged bridge-owned copies; modified phone files are preserved and reported. The report only changes when its meaningful content changes.
 
 ## Schedule, notifications, and controls
