@@ -553,6 +553,17 @@ def _view_changes(base, current, renames, status_types):
     new = [row for _, row in new_rows]
     status_types = status_types or {' ': 'TODO', 'x': 'DONE', 'X': 'DONE', '/': 'IN_PROGRESS', '-': 'CANCELLED'}
     old_lines, new_lines = {i for i, _ in old}, {i for i, _ in new_rows}
+    for _, row in new_rows:
+        if taskfmt.fields(row['suffix'])['description']:
+            raise Rejected('keep the checkbox and the trailing source link before task metadata; description text belongs before the link')
+    if len(before) == len(after):
+        for line, _ in old:
+            checkbox = CHECKBOX.match(after_mask[line])
+            if checkbox and checkbox[3].startswith('] ') and not taskfmt.view_row(after[line]):
+                raise Rejected(f'line {line + 1}: task source link is missing or malformed; restore the complete original source link')
+    known_tokens = {row['token'] for _, row in old}
+    if any(row['token'] not in known_tokens for row in new):
+        raise Rejected('source link identity changed; restore the complete original source link')
     if [line for i, line in enumerate(before) if i not in old_lines] != [line for i, line in enumerate(after) if i not in new_lines]:
         raise Rejected('only checkbox or task field edits are supported; keep the checkbox and source link (the number of lines changed or task context was edited)')
     tokens = [row['token'] for row in new]
@@ -576,8 +587,6 @@ def _view_changes(base, current, renames, status_types):
         for b in group:
             if (re.sub(r'\s+\[$', ' [', a['head']), a['source'], a['ending']) != (re.sub(r'\s+\[$', ' [', b['head']), b['source'], b['ending']):
                 raise Rejected('keep task indentation, checkbox and source link unchanged')
-            if taskfmt.fields(b['suffix'])['description']:
-                raise Rejected('keep the checkbox and the trailing source link before task metadata; description text belongs before the link')
         a_fields = taskfmt.fields(a['title'])
         if len(group) == 2:
             if not a_fields['fields'].get('repeat') or status_types.get(a['status']) == 'DONE':
@@ -1356,7 +1365,12 @@ def sync(settings, home, dry=False):
                     preview.append(f'PHONE EDIT REJECTED {name}: {exc}; the text would be saved and the view restored')
                 else:
                     if toggles or renames or any(w.get('delete') or w.get('recurrence') for w in wanted.values()):
-                        preview.append(f'PHONE EDIT {name}: would toggle {len(toggles)} and rename {len(renames)} task(s)')
+                        title_count = sum(taskfmt.fields(value)['description'] != taskfmt.fields(tasks[name][key]['title'])['description']
+                                          for key, value in renames.items())
+                        recurrence_count = sum(bool(w.get('recurrence')) for w in wanted.values())
+                        delete_count = sum(bool(w.get('delete')) for w in wanted.values())
+                        preview.append(f'PHONE EDIT {name}: would toggle {len(toggles)} and rename {title_count} task(s); '
+                                       f'fields={len(renames) - title_count} recurrence={recurrence_count} delete={delete_count}')
         else:
             if pending.keys() - {p.name for p in active} - held.keys():
                 raise ValueError('disabled project has pending phone edits; re-enable and import before disabling')
