@@ -5,7 +5,7 @@
 # ///
 """Folderwise iCloud bridge: Mac-owned export and boolean task import.
 
-Commands: setup, configure, plan, sync, status, enable, disable, schedule-enable,
+Commands: setup, configure, plan, sync, resolve, status, enable, disable, schedule-enable,
 schedule-disable, schedule-prepare, doctor, logs, notify-test, vault-init, uninstall. See docs/obsidian.md before setup.
 """
 from __future__ import annotations
@@ -125,7 +125,7 @@ def validate_settings(settings, path):
         raise ValueError("adapters must be an object mapping project names to commands")
     if source == vault or source in vault.parents or vault in source.parents:
         raise ValueError("source and vault must be separate, non-nested directories")
-    if settings.get("mode") not in {"full", "lean"} or settings.get("notifications") not in {"off", "errors"}:
+    if settings.get("mode") not in {"full", "lean"} or settings.get("notifications") not in {"off", "errors", "imports"}:
         raise ValueError("invalid mode or notification setting")
     for name in ("interval_minutes", "max_image_bytes", "max_images_total_bytes"):
         n = settings[name]
@@ -171,6 +171,18 @@ def projects(settings, include_disabled=False):
                 raise ValueError(f"{p.name}: expected an independent Git repository")
             result.append(p)
     return result
+
+
+class ProjectError(ValueError):
+    """A problem that pauses one project; every other project keeps syncing."""
+
+
+def owner(key):
+    """The project a vault path belongs to, or None for bridge-wide files such as the dashboard."""
+    parts = PurePosixPath(key).parts
+    if parts[0] == TASK_DIR:
+        return Path(key).stem if len(parts) == 2 else None
+    return parts[0] if len(parts) > 1 else None
 
 
 def rename_projects(settings):
@@ -268,69 +280,81 @@ def adapter(settings, project, operation, changes=None):
     return tasks
 
 
-def inventory(settings, selected_projects=None):
+def inventory(settings, selected_projects=None, failed=None):
     files, tasks, omissions = {}, {}, []
     total_images = 0
     for project in (projects(settings) if selected_projects is None else selected_projects):
-        names = tracked(project)
-        refs, local_tasks = set(), []
-        for rel in names:
-            if Path(rel).suffix.lower() != ".md":
-                continue
-            text = safe(project, rel).read_text()
-            local_tasks.extend(markdown_tasks(text, rel))
-            blocks = re.findall(r'<!--\s*([\w-]+):start\b[^>]*-->(.*?)<!--\s*\1:end\s*-->', text, re.S)
-            if project.name not in settings.get("adapters", {}) and any(CHECKBOX.match(line) for _, block in blocks for line in block.splitlines()):
-                omissions.append(dict(path=project.name + '/' + rel, bytes=0, reason='generated task source requires an adapter (document is still exported)'))
-            definitions = {label.casefold(): angle or plain for label, angle, plain in re.findall(r'^\s*\[([^\]]+)\]:\s*(?:<([^>]+)>|([^\s]+))', text, re.M)}
-            links = [angle or plain for angle, plain in re.findall(r'!\[[^\]]*\]\((?:<([^>]+)>|([^\s)]+))(?:\s+[^)]*)?\)', text)]
-            links += [definitions.get(label.casefold(), "") for label in re.findall(r'!\[[^\]]*\]\[([^\]]+)\]', text)]
-            wiki = re.findall(r'!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]', text)
-            links += wiki
-            for link in links:
-                url = urlsplit(link)
-                if not link or url.scheme or url.netloc:
+        mark = (set(files), len(omissions), total_images)
+        try:
+            names = tracked(project)
+            refs, local_tasks = set(), []
+            for rel in names:
+                if Path(rel).suffix.lower() != ".md":
                     continue
-                target = os.path.normpath(str(PurePosixPath(rel).parent / unquote(url.path)))
-                safe(project, target)
-                if link in wiki and target not in names:
-                    matches = [name for name in names if name == unquote(url.path) or name.endswith('/' + unquote(url.path))]
-                    if len(matches) != 1:
-                        raise ValueError(f"{project.name}/{rel}: missing or ambiguous image embed {link!r}")
-                    target = matches[0]
-                if target not in names and Path(target).suffix.lower() in IMAGES:
-                    omissions.append(dict(path=project.name + '/' + target, bytes=0, reason='referenced image is missing or not tracked'))
-                refs.add(target)
-        local_tasks.extend(adapter(settings, project, "list"))
-        tasks[project.name] = {t["id"]: t for t in local_tasks}
-        for rel in names:
-            p = safe(project, rel)
-            suffix, size = p.suffix.lower(), p.stat().st_size
-            image, reason = suffix in IMAGES, None
-            if settings["mode"] == "lean" and suffix != ".md" and not (image and rel in refs):
-                reason = "excluded by lean mode"
-            elif image and settings["max_image_bytes"] is not None and size > settings["max_image_bytes"]:
-                reason = "exceeds per-image limit"
-            elif image and settings["max_images_total_bytes"] is not None and total_images + size > settings["max_images_total_bytes"]:
-                reason = "exceeds aggregate image limit"
-            key = project.name + "/" + rel
-            if reason:
-                omissions.append(dict(path=key, bytes=size, reason=reason))
-                continue
-            if image:
-                total_images += size
-            files[key] = p
-        can_rename = dl.load_config(project).get("folderwise-ibridgerename", False)
-        note = ("Generated task view. Checkbox toggles and title edits are imported; keep each line's trailing (source) link."
-                if can_rename else "Generated task view. Only checkbox toggles are imported.")
-        projection = [f"# {project.name} tasks", "", note, ""]
-        mapping = []
-        for task in local_tasks:
-            target = quote(project.name + "/" + task["path"], safe="/")
-            mapping.append(dict(line=len(projection), id=task["id"], checked=task["checked"]))
-            projection.append(f"- [{'x' if task['checked'] else ' '}] {view_title(task['title'])}{SOURCE_TAIL}../{target}))")
-        files[f"{TASK_DIR}/{project.name}.md"] = ("\n".join(projection) + "\n").encode()
-        tasks[project.name]["_projection"] = mapping
+                text = safe(project, rel).read_text()
+                local_tasks.extend(markdown_tasks(text, rel))
+                blocks = re.findall(r'<!--\s*([\w-]+):start\b[^>]*-->(.*?)<!--\s*\1:end\s*-->', text, re.S)
+                if project.name not in settings.get("adapters", {}) and any(CHECKBOX.match(line) for _, block in blocks for line in block.splitlines()):
+                    omissions.append(dict(path=project.name + '/' + rel, bytes=0, reason='generated task source requires an adapter (document is still exported)'))
+                definitions = {label.casefold(): angle or plain for label, angle, plain in re.findall(r'^\s*\[([^\]]+)\]:\s*(?:<([^>]+)>|([^\s]+))', text, re.M)}
+                links = [angle or plain for angle, plain in re.findall(r'!\[[^\]]*\]\((?:<([^>]+)>|([^\s)]+))(?:\s+[^)]*)?\)', text)]
+                links += [definitions.get(label.casefold(), "") for label in re.findall(r'!\[[^\]]*\]\[([^\]]+)\]', text)]
+                wiki = re.findall(r'!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]', text)
+                links += wiki
+                for link in links:
+                    url = urlsplit(link)
+                    if not link or url.scheme or url.netloc:
+                        continue
+                    target = os.path.normpath(str(PurePosixPath(rel).parent / unquote(url.path)))
+                    safe(project, target)
+                    if link in wiki and target not in names:
+                        matches = [name for name in names if name == unquote(url.path) or name.endswith('/' + unquote(url.path))]
+                        if len(matches) != 1:
+                            raise ValueError(f"{project.name}/{rel}: missing or ambiguous image embed {link!r}")
+                        target = matches[0]
+                    if target not in names and Path(target).suffix.lower() in IMAGES:
+                        omissions.append(dict(path=project.name + '/' + target, bytes=0, reason='referenced image is missing or not tracked'))
+                    refs.add(target)
+            local_tasks.extend(adapter(settings, project, "list"))
+            tasks[project.name] = {t["id"]: t for t in local_tasks}
+            for rel in names:
+                p = safe(project, rel)
+                suffix, size = p.suffix.lower(), p.stat().st_size
+                image, reason = suffix in IMAGES, None
+                if settings["mode"] == "lean" and suffix != ".md" and not (image and rel in refs):
+                    reason = "excluded by lean mode"
+                elif image and settings["max_image_bytes"] is not None and size > settings["max_image_bytes"]:
+                    reason = "exceeds per-image limit"
+                elif image and settings["max_images_total_bytes"] is not None and total_images + size > settings["max_images_total_bytes"]:
+                    reason = "exceeds aggregate image limit"
+                key = project.name + "/" + rel
+                if reason:
+                    omissions.append(dict(path=key, bytes=size, reason=reason))
+                    continue
+                if image:
+                    total_images += size
+                files[key] = p
+            can_rename = dl.load_config(project).get("folderwise-ibridgerename", False)
+            note = ("Generated task view. Checkbox toggles and title edits are imported; keep each line's trailing (source) link."
+                    if can_rename else "Generated task view. Only checkbox toggles are imported.")
+            projection = [f"# {project.name} tasks", "", note, ""]
+            mapping = []
+            for task in local_tasks:
+                target = quote(project.name + "/" + task["path"], safe="/")
+                mapping.append(dict(line=len(projection), id=task["id"], checked=task["checked"]))
+                projection.append(f"- [{'x' if task['checked'] else ' '}] {view_title(task['title'])}{SOURCE_TAIL}../{target}))")
+            files[f"{TASK_DIR}/{project.name}.md"] = ("\n".join(projection) + "\n").encode()
+            tasks[project.name]["_projection"] = mapping
+        except ValueError as exc:
+            if failed is None:
+                raise
+            # One project's problem pauses that project only; it keeps its previous export.
+            for key in set(files) - mark[0]:
+                del files[key]
+            del omissions[mark[1]:]
+            total_images = mark[2]
+            tasks.pop(project.name, None)
+            failed[project.name] = str(exc)
     files[DASHBOARD] = ("# All projects\n\n## Open tasks\n\n```tasks\npath includes " + TASK_DIR +
                         "\nnot done\ngroup by filename\n```\n\n## Completed tasks\n\n```tasks\npath includes " + TASK_DIR +
                         "\ndone\ngroup by filename\n```\n").encode()
@@ -432,9 +456,10 @@ def merge_edits(target, staged):
     return merged
 
 
-def requests(vault, state, renames=frozenset()):
+def requests(vault, state, renames=frozenset(), failures=None):
     """Collect phone edits: (wanted per project, files each project's edits came from,
-    vault hashes accepted as valid, generated views rejected with the reason)."""
+    vault hashes accepted as valid, generated views rejected with the reason).
+    A bad edit to a copied note is recorded in `failures` for its project when a dict is given."""
     wanted, sources, accepted, rejected = {}, {}, {}, {}
     for key, entry in state.get("files", {}).items():
         p = safe(vault, key)
@@ -455,9 +480,12 @@ def requests(vault, state, renames=frozenset()):
                 staged[mapping[line]["id"]] = change
             wanted[project] = merge_edits(wanted.get(project, {}), staged)
         except Rejected as exc:
-            if not view:
+            if view:
+                rejected[key] = str(exc)
+            elif failures is None:
                 raise ValueError(f"{key}: {exc}") from None
-            rejected[key] = str(exc)
+            else:
+                failures.setdefault(project, f"{key}: {exc}")
             continue
         sources.setdefault(project, set()).add(key)
         accepted[key] = content_hash(p)
@@ -475,14 +503,15 @@ def rewrite_task(line, checked, title):
     return m[1] + mark + "]" + rest + line[len(body):]
 
 
-def import_project(settings, project, wanted, baseline, current, home):
+def plan_import(name, wanted, baseline, current):
+    """What a project's pending phone edits would change: (toggles, renames), or Rejected."""
     toggles, renames = {}, {}
     for key, want in wanted.items():
         if key not in current or key not in baseline:
-            raise Rejected(f"{project.name}: task changed or disappeared on Mac; resolve pending edit")
+            raise Rejected(f"{name}: task changed or disappeared on Mac; resolve pending edit")
         task, old = current[key], baseline[key]
         if task.get("duplicate") and task["source_hash"] != old.get("source_hash"):
-            raise Rejected(f"{project.name}: duplicate task moved during concurrent edit")
+            raise Rejected(f"{name}: duplicate task moved during concurrent edit")
         if want["checked"] is not None and task["checked"] != want["checked"]:
             toggles[key] = want["checked"]
         title = want["title"]
@@ -497,8 +526,13 @@ def import_project(settings, project, wanted, baseline, current, home):
             elif key.startswith("adapter:") and "title" not in task.get("editable", []):
                 reason = "its adapter does not allow title edits"
             if reason:
-                raise Rejected(f"{project.name}: a task cannot be renamed from the phone ({reason}); edit it on the Mac")
+                raise Rejected(f"{name}: a task cannot be renamed from the phone ({reason}); edit it on the Mac")
             renames[key] = title
+    return toggles, renames
+
+
+def import_project(settings, project, wanted, baseline, current, home):
+    toggles, renames = plan_import(project.name, wanted, baseline, current)
     if not toggles and not renames:
         return None
     if git(project, "status", "--porcelain"):
@@ -646,6 +680,26 @@ def conflict_copies(vault, keys):
     return sorted(found)
 
 
+def resolve(settings, home, key=None):
+    """List vault files that differ from the last export, or save one's phone text and put the Mac version back."""
+    vault = Path(settings['vault'])
+    state = read_json(home / 'state.json', {'files': {}})
+    pending = [name for name, entry in sorted(state['files'].items())
+               if 'text' in entry and safe(vault, name).is_file() and safe(vault, name).read_text() != entry['text']]
+    if key is None:
+        for name in pending:
+            print('PENDING ' + name)
+        print(f"{len(pending)} pending phone edit(s); run resolve with one path to save its phone text and restore the Mac version."
+              if pending else 'No pending phone edits.')
+        return 0
+    if key not in pending:
+        raise ValueError(f"{key}: no pending phone edit; run resolve without a path to list them")
+    stash_phone_text(home, key, safe(vault, key))
+    atomic(safe(vault, key), state['files'][key]['text'].encode())
+    print(f"Saved the phone text under {home / 'rejected'} and restored {key} to the last exported version; the next sync continues.")
+    return 0
+
+
 def deferrable(home, exc):
     """True, and recorded, for a brief iCloud file lock; the third consecutive failure is reported."""
     if not (isinstance(exc, OSError) and exc.errno in TRANSIENT):
@@ -749,7 +803,7 @@ def cell(value):
     return str(value).replace("|", "&#124;").replace("\n", " ")
 
 
-def report(files, omissions, issues, settings, managed_bytes, ledger=None, copies=()):
+def report(files, omissions, issues, settings, managed_bytes, ledger=None, copies=(), paused=()):
     image_bytes = sum(content_size(data) for key, data in files.items() if Path(key).suffix.lower() in IMAGES)
     rows = ["# Folderwise sync status", "", f"Mode: **{settings['mode']}**. Interval: **{settings['interval_minutes']} minutes**.",
             f"Estimated managed export: **{sum(content_size(data) for data in files.values()):,} bytes**, including **{image_bytes:,} image bytes**.",
@@ -757,6 +811,8 @@ def report(files, omissions, issues, settings, managed_bytes, ledger=None, copie
             "This is a file-size estimate, not your iCloud account usage or bill.",
             f"Image limits: per file={settings['max_image_bytes']}; aggregate={settings['max_images_total_bytes']} bytes (None = unlimited).", "", "## Issues", ""]
     rows += ["- " + str(x).replace("\n", " ") for x in issues] or ["None."]
+    if paused:
+        rows += ["", "Paused projects: " + ", ".join(cell(p) for p in paused) + ". Their imports and exports wait until the issue is fixed; other projects keep syncing."]
     ledger = ledger or {}
     if ledger.get("rejected"):
         rows += ["", "## Phone edits not applied", "",
@@ -833,7 +889,7 @@ def sync(settings, home, dry=False):
     if not settings.get("enabled", True):
         raise ValueError("bridge is uninstalled or setup incomplete; run setup to enable it")
     vault = Path(settings['vault'])
-    issues, notices = [], []
+    issues, notices, held, run_imports, preview = [], [], {}, [], []
     files, tasks, omissions = {}, {}, []
     ledger = read_json(home / 'ledger.json', {'imports': [], 'rejected': []})
     accepted, restored = {}, set()
@@ -851,29 +907,49 @@ def sync(settings, home, dry=False):
             recover_export(home, vault)
             prune_private(home, ledger)
         state = read_json(home / 'state.json', {'files': {}, 'tasks': {}})
-        files, tasks, omissions = inventory(settings)
+        files, tasks, omissions = inventory(settings, failed=None if dry else held)
         snapshot = {key: existing_hash(safe(vault, key)) for key in state['files'].keys() | files.keys()}
-        if not dry:
-            pending, sources, accepted, rejected = requests(vault, state, rename_projects(settings))
+        pending, sources, accepted, rejected = requests(vault, state, rename_projects(settings), held)
+        if dry:
             for key, reason in rejected.items():
-                reject(key, reason)
+                preview.append(f'PHONE EDIT REJECTED {key}: {reason}; the text would be saved and the view restored')
+            for name, reason in held.items():
+                preview.append(f'PHONE EDIT BLOCKED {name}: {reason}')
+            for name, wanted in sorted(pending.items()):
+                try:
+                    toggles, renames = plan_import(name, wanted, state['tasks'].get(name, {}), tasks.get(name, {}))
+                except Rejected as exc:
+                    preview.append(f'PHONE EDIT REJECTED {name}: {exc}; the text would be saved and the view restored')
+                else:
+                    if toggles or renames:
+                        preview.append(f'PHONE EDIT {name}: would toggle {len(toggles)} and rename {len(renames)} task(s)')
+        else:
             active = projects(settings)
             if pending.keys() - {p.name for p in active}:
                 raise ValueError('disabled project has pending phone edits; re-enable and import before disabling')
             for project in active:
-                if project.name in pending:
-                    try:
-                        done = import_project(settings, project, pending[project.name], state['tasks'].get(project.name, {}), tasks[project.name], home)
-                    except Rejected as exc:
-                        origin = sources.get(project.name, set())
-                        if not origin or not all(k.startswith(TASK_DIR + '/') for k in origin):
-                            raise
+                if project.name not in pending or project.name in held:
+                    continue
+                try:
+                    done = import_project(settings, project, pending[project.name], state['tasks'].get(project.name, {}), tasks[project.name], home)
+                except Rejected as exc:
+                    origin = sources.get(project.name, set())
+                    if origin and all(k.startswith(TASK_DIR + '/') for k in origin):
                         for key in sorted(origin):
                             reject(key, str(exc))
-                        continue
-                    if done:
-                        ledger_add(ledger, 'imports', project=project.name, **done)
-            files, tasks, omissions = inventory(settings)
+                    else:
+                        held[project.name] = str(exc)
+                    continue
+                except ValueError as exc:
+                    held[project.name] = str(exc)
+                    continue
+                if done:
+                    run_imports.append(done)
+                    ledger_add(ledger, 'imports', project=project.name, **done)
+            for key, reason in rejected.items():
+                if owner(key) not in held:
+                    reject(key, reason)
+            files, tasks, omissions = inventory(settings, failed=held)
     except (ValueError, OSError) as exc:
         if dry:
             raise
@@ -890,44 +966,68 @@ def sync(settings, home, dry=False):
             print(f'REMOVE if unchanged: {key}')
         for item in omissions:
             print(f"SKIP {item['path']}: {item['bytes']} bytes; {item['reason']}")
+        for line in preview:
+            print(line)
         return 0
-    # Failed imports freeze exports. Preflight all writes and cleanup before journaling.
+    # A bridge-wide problem freezes every export. A problem in one project pauses only that project:
+    # it keeps its previous records and vault files while the others sync.
     if not issues:
         next_files, writes, removes = {}, {}, {}
         try:
             for key, data in files.items():
-                target = safe(vault, key)
-                old = state['files'].get(key)
-                before, after = existing_hash(target), content_hash(data)
-                if before != snapshot.get(key):
-                    raise ValueError(f'{key}: vault changed during sync; preserved for next run')
-                if (before is not None and before != after and (not old or before != old['hash'])
-                        and before != accepted.get(key) and key not in restored):
-                    try:
-                        task_changes(old['text'], target.read_text())
-                    except (ValueError, KeyError, TypeError, UnicodeError):
-                        raise ValueError(f'{key}: unexpected vault edit or unowned file; preserved') from None
-                entry = {'hash': after}
-                if key.lower().endswith('.md'):
-                    entry['text'] = data.read_text() if isinstance(data, Path) else data.decode()
-                    if key.startswith(TASK_DIR + '/'):
-                        name = Path(key).stem
-                        entry.update(project=name, tasks=tasks[name]['_projection'])
-                    elif '/' in key:
-                        name, rel = key.split('/', 1)
-                        entry.update(project=name, tasks=[t for k, t in tasks[name].items() if k.startswith('md:') and t['path'] == rel])
-                next_files[key] = entry
-                if before != after:
-                    payload = {'source': str(data)} if isinstance(data, Path) else {'data': base64.b64encode(data).decode()}
-                    writes[key] = dict(before=before, after=after, **payload)
+                name = owner(key)
+                if name in held:
+                    continue
+                try:
+                    target = safe(vault, key)
+                    old = state['files'].get(key)
+                    before, after = existing_hash(target), content_hash(data)
+                    if before != snapshot.get(key):
+                        raise ValueError(f'{key}: vault changed during sync; preserved for next run')
+                    if (before is not None and before != after and (not old or before != old['hash'])
+                            and before != accepted.get(key) and key not in restored):
+                        try:
+                            task_changes(old['text'], target.read_text())
+                        except (ValueError, KeyError, TypeError, UnicodeError):
+                            raise ValueError(f'{key}: unexpected vault edit or unowned file; preserved') from None
+                    entry = {'hash': after}
+                    if key.lower().endswith('.md'):
+                        entry['text'] = data.read_text() if isinstance(data, Path) else data.decode()
+                        if key.startswith(TASK_DIR + '/'):
+                            entry.update(project=name, tasks=tasks[name]['_projection'])
+                        elif '/' in key:
+                            entry.update(project=name, tasks=[t for k, t in tasks[name].items() if k.startswith('md:') and t['path'] == key.split('/', 1)[1]])
+                    next_files[key] = entry
+                    if before != after:
+                        payload = {'source': str(data)} if isinstance(data, Path) else {'data': base64.b64encode(data).decode()}
+                        writes[key] = dict(before=before, after=after, **payload)
+                except ValueError as exc:
+                    if name is None:
+                        raise
+                    held[name] = str(exc)
             for key, old in state['files'].items():
-                if key not in files:
+                name = owner(key)
+                if key in files or name in held:
+                    continue
+                try:
                     p = safe(vault, key)
                     before = existing_hash(p)
                     if before != snapshot.get(key) or before not in {None, old['hash']}:
                         raise ValueError(f'{key}: changed copy prevents cleanup; preserved')
                     removes[key] = before
-            save(home / 'export.json', dict(writes=writes, removes=removes, state={'files': next_files, 'tasks': tasks, 'schema': 2}))
+                except ValueError as exc:
+                    if name is None:
+                        raise
+                    held[name] = str(exc)
+            for key in [k for k in list(next_files) + list(removes) if owner(k) in held]:
+                next_files.pop(key, None)
+                writes.pop(key, None)
+                removes.pop(key, None)
+            for key, old in state['files'].items():
+                if owner(key) in held:
+                    next_files[key] = old
+            kept = {name: state['tasks'][name] for name in held if name in state['tasks']}
+            save(home / 'export.json', dict(writes=writes, removes=removes, state={'files': next_files, 'tasks': {**tasks, **kept}, 'schema': 2}))
             recover_export(home, vault)
         except (ValueError, OSError) as exc:
             if deferrable(home, exc):
@@ -951,7 +1051,8 @@ def sync(settings, home, dry=False):
     if legacy_before is not None and not legacy_owned:
         issues.append(f'{LEGACY_REPORT}: legacy report has unowned edits; preserved. Move it outside the vault after review.')
     copies = conflict_copies(vault, set(accepted_state['files']) | set(files)) if not issues else []
-    status = report(files, omissions, issues, settings, managed_bytes, ledger, copies)
+    issues.extend(held.values())
+    status = report(files, omissions, issues, settings, managed_bytes, ledger, copies, sorted(held))
     target = safe(vault, REPORT)
     if target.exists() and content_hash(target) not in {previous_report.get('hash'), digest(status)}:
         raise ValueError(f'{REPORT} has unowned edits; preserve/rename it before retrying')
@@ -967,8 +1068,13 @@ def sync(settings, home, dry=False):
     previous = read_json(home / 'last-run.json', {})
     actionable = [item for item in omissions if item['reason'] != 'excluded by lean mode']
     signature = digest(json.dumps([issues, notices, actionable], sort_keys=True).encode())
-    if settings['notifications'] == 'errors' and (issues or actionable or notices) and previous.get('issue_signature') != signature:
+    mode = settings['notifications']
+    if mode != 'off' and (issues or actionable or notices) and previous.get('issue_signature') != signature:
         last['notification_sent'] = notify('Folderwise bridge needs attention. See _folderwise-sync-status.md in your vault.', home)
+    elif mode == 'imports' and run_imports:
+        changes = sum(item['toggled'] + item['renamed'] for item in run_imports)
+        last['notification_sent'] = notify(f'Folderwise applied {changes} phone change(s) in {len(run_imports)} project(s). '
+                                           'See _folderwise-sync-status.md in your vault.', home)
     last['issue_signature'] = signature
     save(home / 'ledger.json', ledger)
     save(home / 'last-run.json', last)
@@ -981,6 +1087,7 @@ def sync(settings, home, dry=False):
     for issue in issues:
         print('ERROR ' + issue)
     return 1 if issues else 0
+
 
 def prepare_schedule(settings, config_path):
     """Prepare an owned named entry point and plist preview, without OS registration."""
@@ -1221,9 +1328,9 @@ def main():
     ap.add_argument("--max-image-bytes", type=int)
     ap.add_argument("--max-images-total-bytes", type=int)
     ap.add_argument("--unlimited-images", action="store_true")
-    ap.add_argument("--notifications", choices=["off", "errors"])
-    ap.add_argument("command", choices=["setup", "configure", "plan", "sync", "status", "enable", "disable", "schedule-enable", "schedule-disable", "doctor", "logs", "notify-test", "vault-init", "uninstall", "schedule-prepare"])
-    ap.add_argument("project", nargs="?")
+    ap.add_argument("--notifications", choices=["off", "errors", "imports"])
+    ap.add_argument("command", choices=["setup", "configure", "plan", "sync", "status", "enable", "disable", "schedule-enable", "schedule-disable", "doctor", "logs", "notify-test", "vault-init", "uninstall", "schedule-prepare", "resolve"])
+    ap.add_argument("project", nargs="?", help="enable/disable: project folder; resolve: vault-relative path of a file with a pending phone edit")
     args = ap.parse_args()
     if args.setup_message and args.command != "notify-test":
         ap.error("--setup-message requires notify-test")
@@ -1281,6 +1388,8 @@ def main():
                 atomic(project / ".docs.yaml", yaml.safe_dump(pc, sort_keys=False).encode())
                 print(f"{args.project}: folderwise-ibridgesync={pc['folderwise-ibridgesync']}; commit this project setting when ready")
                 return 0
+            if args.command == "resolve":
+                return resolve(settings, path.parent, args.project)
             if args.command in {"sync", "plan"}:
                 return sync(settings, path.parent, args.command == "plan")
             if args.command == 'schedule-prepare':

@@ -42,7 +42,7 @@ Existing setting files are preserved in full. If you already have Tasks settings
 
 Configuration, ownership records, baselines, temporary clones, export journal and logs stay outside iCloud. On Mac the default state directory is `~/Library/Application Support/Folderwise/ibridge/`. A private `.folderwise-obsidian.json` at the source root records whether the integration is enabled and points to that configuration. `new_project.py` reads it in each new process. Neither file is committed to the framework. Use `--config /absolute/path/config.json` before a bridge command for another private installation. Keep recovery state: deleting it removes knowledge of pending edits and owned files. Source, vault and state directories must remain separate.
 
-`plan` previews ordinary export/cleanup; `sync` performs a foreground run. They never recreate removed Obsidian settings. New or missing defaults are installed only through explicit setup or `vault-init`.
+`plan` previews ordinary export/cleanup and any pending phone edits (`PHONE EDIT alpha: would toggle 1 and rename 0 task(s)`, or `PHONE EDIT REJECTED …` with the reason); `sync` performs a foreground run. Neither recreates removed Obsidian settings, and `plan` changes nothing. New or missing defaults are installed only through explicit setup or `vault-init`.
 
 ## Central task dashboard
 
@@ -75,7 +75,7 @@ On each scheduled or manual `sync`, the bridge:
 
 To refresh immediately, run `uv run _tools/icloud_bridge.py sync` on the Mac. The scheduled job performs the same operation at your configured interval.
 
-**Toggle checkboxes; do not add tasks, reorder lines, or rename these files or their folder.** By default only checkbox on/off changes are imported; title edits need the per-project opt-in below. If you make any other edit to a generated task view, the bridge saves your exact text on the Mac (outside iCloud, kept 30 days), restores the view from Mac data on the next sync, lists the edit under **Phone edits not applied** in `_folderwise-sync-status.md`, and sends one notification. Unsupported edits to a copied source note are different: they stay in the vault and freeze export so they cannot be overwritten (see [Conflicts and recovery](#conflicts-and-recovery)). Missing generated files are restored from Mac data on the next sync. Task identity and ownership mappings live in the bridge’s local state outside iCloud; the generated Markdown is an interactive view, not the authoritative task store.
+**Toggle checkboxes; do not add tasks, reorder lines, or rename these files or their folder.** By default only checkbox on/off changes are imported; title edits need the per-project opt-in below. If you make any other edit to a generated task view, the bridge saves your exact text on the Mac (outside iCloud, kept 30 days), restores the view from Mac data on the next sync, lists the edit under **Phone edits not applied** in `_folderwise-sync-status.md`, and sends one notification. Unsupported edits to a copied source note are different: they stay in the vault and pause that project so they cannot be overwritten (see [Conflicts and recovery](#conflicts-and-recovery)). Missing generated files are restored from Mac data on the next sync. Task identity and ownership mappings live in the bridge’s local state outside iCloud; the generated Markdown is an interactive view, not the authoritative task store.
 
 Configure Tasks for simple toggles: disable automatic done/created/cancelled dates, leave its global filter empty, use ordinary space/x statuses, and avoid recurring tasks or on-completion deletion. Those features modify more than a checkbox and are outside this bridge's contract. A plugin-added date is preserved and reported as an unsupported edit, rather than silently discarded. Dataview is optional for property tables; [Dataview TASK](https://blacksmithgu.github.io/obsidian-dataview/queries/query-types/#task) can also toggle a checkbox, provided completion metadata insertion is disabled.
 
@@ -255,9 +255,10 @@ Folderwise builds a small notification app locally using macOS’s built-in `osa
 ```sh
 uv run _tools/icloud_bridge.py configure --notifications off
 uv run _tools/icloud_bridge.py configure --notifications errors
+uv run _tools/icloud_bridge.py configure --notifications imports
 ```
 
-The default is `errors`; `off` also suppresses the enable announcement. `notify-test` is an explicit request to display a test regardless of that preference. Local `bridge.log` rotates at about 1 MB; launchd's stdout/stderr logs are separate files in the configuration directory. `doctor` reports pending failures, stale scheduled runs and interval mismatches. Use `launchctl print gui/$(id -u)/org.folderwise.ibridge` for OS diagnostics; the bridge does not parse its unstable output format.
+The default is `errors`; `off` also suppresses the enable announcement. `configure --notifications imports` additionally sends one note per run that applied phone edits, with counts only (for example “Folderwise applied 2 phone change(s) in 1 project(s)”), never task or document text. If the same run also needs attention, only the attention alert is sent; the status report's **Recent imports** still lists the commits. `notify-test` is an explicit request to display a test regardless of that preference. Local `bridge.log` rotates at about 1 MB; launchd's stdout/stderr logs are separate files in the configuration directory. `doctor` reports pending failures, stale scheduled runs and interval mismatches. Use `launchctl print gui/$(id -u)/org.folderwise.ibridge` for OS diagnostics; the bridge does not parse its unstable output format.
 
 ### A notification appears only in Notification Center
 
@@ -277,9 +278,20 @@ Use the same `--config /absolute/path/config.json` argument as your installed br
 
 ## Conflicts and recovery
 
-Phone imports are evaluated against the last accepted baseline, not modification timestamps. A rejected edit to a **generated task view** is saved to the bridge state's `rejected/` folder (private to your user, outside iCloud, kept 30 days), the view is restored, the edit is listed in the status report, and other projects keep syncing. A pending edit that conflicts with a Mac-side change (for example a toggle or rename of a task that was renamed on the Mac) is handled the same way. Unsupported or conflicting edits to a **copied source note**, and failures such as a dirty project or a failed hook, freeze export so they cannot be overwritten; the error names the file and line.
+Phone imports are evaluated against the last accepted baseline, not modification timestamps. A rejected edit to a **generated task view** is saved to the bridge state's `rejected/` folder (private to your user, outside iCloud, kept 30 days), the view is restored, the edit is listed in the status report, and other projects keep syncing. A pending edit that conflicts with a Mac-side change (for example a toggle or rename of a task that was renamed on the Mac) is handled the same way. Unsupported or conflicting edits to a **copied source note**, and failures such as a dirty project or a failed hook, pause that project (below) so nothing is overwritten; the error names the file and line.
 
-If iCloud briefly locks a file while it syncs (for example "Resource deadlock avoided"), the run is deferred and retried quietly; only the third consecutive failure is reported. After a freeze: read `_folderwise-sync-status.md` and local logs; preserve the edited vault file outside managed paths, resolve the corresponding source on Mac, then restore the exported file to its previous baseline or apply only the intended checkbox change. Do not erase bridge state to make a conflict disappear.
+**One project's problem pauses only that project.** A dirty source tree, a failed hook or adapter, an unsupported edit to a copied note, an unsafe link, or a changed vault file pauses the project it belongs to: its imports and exports wait, its vault copies and pending phone edits stay exactly as they are, and the status report says `Paused projects: <names>`. Other projects keep importing, exporting and committing. The attention alert fires once per distinct problem. Problems that belong to no project (the dashboard, the status report, an interrupted export journal) still freeze every export. Fix the cause and the next sync resumes the project; no state needs to be erased.
+
+To get an unwanted phone edit out of the way without hand-restoring bytes, list and resolve it:
+
+```sh
+uv run _tools/icloud_bridge.py resolve                              # lists vault files that differ from the last export
+uv run _tools/icloud_bridge.py resolve "alpha/docs/checklist.md"    # saves the phone text, restores the Mac version
+```
+
+`resolve <path>` saves the exact phone text under the bridge state's private `rejected/` folder (kept 30 days) and puts the last exported version back, so the paused project resumes on the next sync. It refuses a path with no pending phone edit and never touches your source repositories.
+
+If iCloud briefly locks a file while it syncs (for example "Resource deadlock avoided"), the run is deferred and retried quietly; only the third consecutive failure is reported. After a bridge-wide freeze: read `_folderwise-sync-status.md` and local logs; preserve the edited vault file outside managed paths, resolve the corresponding source on Mac, then restore the exported file to its previous baseline or apply only the intended checkbox change. Do not erase bridge state to make a conflict disappear.
 
 Export uses a local journal (`export.json`) so interrupted copies can finish on a later run. Replay proceeds only when each destination still matches the old or intended bytes and each source payload remains unchanged. If either side changed, it stops and preserves the files. Keep independent backups of your source repositories.
 

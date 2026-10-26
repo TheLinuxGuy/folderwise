@@ -1624,6 +1624,169 @@ def s_ibridge_rename():
     check('an adapter editable field must be a list', rc == 1 and 'editable must be a list' in out, out)
 
 
+def s_ibridge_isolation():
+    """One project's problem pauses only that project; plan previews phone edits; resolve; counts-only notifications."""
+    root = CTX['root'] / 'isolation-sandbox'
+    source, vault, home = root / 'source', root / 'vault', root / 'state'
+    source.mkdir(parents=True)
+    for name in ('_tools', '_template'):
+        shutil.copytree(CTX['root'] / name, source / name, ignore=shutil.ignore_patterns('__pycache__'))
+    conf = home / 'config.json'
+    fake = root / 'fakebin'
+    fake.mkdir()
+    for executable in ('open', 'codesign', 'launchctl'):
+        (fake / executable).write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "' + str(root / 'os-calls') + '"\nexit 0\n')
+        (fake / executable).chmod(0o755)
+    (fake / 'open').write_text((fake / 'open').read_text().replace('exit 0', 'cat "' + str(home / 'notification-message.txt') + '" >> "' + str(root / 'notification-bodies') + '"\necho >> "' + str(root / 'notification-bodies') + '"\nexit 0'))
+    (fake / 'osacompile').write_text('#!' + sys.executable + '\nimport pathlib,plistlib,sys\np=pathlib.Path(sys.argv[2])/"Contents"\n(p/"Resources").mkdir(parents=True)\n(p/"Info.plist").write_bytes(plistlib.dumps({"CFBundleName":"applet","CFBundleIconName":"applet"}))\n(p/"Resources/Assets.car").write_bytes(b"x")\n(p/"Resources/main.scpt").write_bytes(pathlib.Path(sys.argv[3]).read_bytes())\n')
+    (fake / 'osacompile').chmod(0o755)
+
+    def invoke(*args, extra=None):
+        return tool('icloud_bridge.py', '--config', conf, *args, env={'PATH': str(fake) + os.pathsep + os.environ['PATH'], **(extra or {})})
+
+    def local(name, *args, cwd=None):
+        return sh(['uv', 'run', '--quiet', str(source / '_tools' / name), *map(str, args)], cwd=cwd or source)
+
+    def commit(project, message):
+        sh(['git', 'add', '-A'], cwd=project)
+        return sh(['git', 'commit', '-qm', message], cwd=project)
+
+    def head(project):
+        return sh(['git', 'rev-parse', 'HEAD'], cwd=project)[1]
+
+    def bodies():
+        path = root / 'notification-bodies'
+        return path.read_text() if path.exists() else ''
+
+    for name in ('alpha', 'beta', 'gamma', 'delta'):
+        rc, out = local('new_project.py', '--name', name, '--description', 'Fictional isolation test', '--no-prompt')
+        check('isolation sandbox creates ' + name, rc == 0, out)
+        local('docs_new.py', 'docs/checklist.md', '--type', 'plan', '--title', 'Checklist', '--by', 'human', cwd=source / name)
+    alpha, beta, gamma, delta = (source / n for n in ('alpha', 'beta', 'gamma', 'delta'))
+    for project, marker in ((alpha, 'A1'), (beta, 'B1'), (delta, 'D1')):
+        doc = project / 'docs/checklist.md'
+        doc.write_text(doc.read_text().replace('## Change Log', f'- [ ] {marker} task\n\n## Change Log'))
+        local('docs_stamp.py', 'docs/checklist.md', '--by', 'human', '--summary', 'Add task', cwd=project)
+        commit(project, 'Add task')
+    (gamma / 'data').mkdir(exist_ok=True)
+    (gamma / 'data/tasks.csv').write_text('id,title,done\nrow-1,G1 task,false\n')
+    (gamma / 'scripts').mkdir(exist_ok=True)
+    (gamma / 'scripts/adapter.py').write_text(
+        "import csv,json,os,sys\nfrom pathlib import Path\np=Path('data/tasks.csv')\nrows=list(csv.DictReader(p.open()))\nop=sys.argv[1]\n"
+        "if op=='list':\n print(json.dumps([dict(id=r['id'],title=r['title'],checked=r['done']=='true',path='docs/checklist.md') for r in rows]))\n"
+        "elif op=='apply':\n changes={c['id']:c['checked'] for c in json.load(sys.stdin)}\n for r in rows:\n  if r['id'] in changes: r['done']='true' if changes[r['id']] else 'false'\n"
+        " with p.open('w',newline='') as f:\n  w=csv.DictWriter(f,fieldnames=['id','title','done']);w.writeheader();w.writerows(rows)\n"
+        " note=Path('docs/checklist.md');text=note.read_text();s=text.index('<!-- tasks:start -->');e=text.index('<!-- tasks:end -->')\n"
+        " note.write_text(text[:s]+'<!-- tasks:start -->\\n'+''.join('- [ ] '+r['title']+'\\n' for r in rows if r['done']=='false')+text[e:])\n"
+        "elif op=='validate' and os.environ.get('IBRIDGE_FAIL_VALIDATE'):\n print('validation refused',file=sys.stderr);sys.exit(1)\n")
+    doc = gamma / 'docs/checklist.md'
+    doc.write_text(doc.read_text().replace('## Change Log', '<!-- tasks:start -->\n- [ ] G1 task\n<!-- tasks:end -->\n\n## Change Log'))
+    local('docs_stamp.py', 'docs/checklist.md', '--by', 'human', '--summary', 'Add generated task', cwd=gamma)
+    commit(gamma, 'Add adapter')
+    rc, out = invoke('setup', '--source', source, '--vault', vault, '--notifications', 'imports', '--no-schedule')
+    cfg = json.loads(conf.read_text())
+    cfg['adapters'] = {'gamma': [sys.executable, 'scripts/adapter.py']}
+    conf.write_text(json.dumps(cfg))
+    check('setup accepts the imports notification mode', rc == 0 and json.loads(conf.read_text())['notifications'] == 'imports', out)
+    rc, out = tool('icloud_bridge.py', '--config', conf, 'configure', '--notifications', 'sometimes')
+    check('unknown notification modes are rejected', rc == 2, out)
+    views = {n: vault / f'_Folderwise Tasks/{n}.md' for n in ('alpha', 'beta', 'gamma', 'delta')}
+    notes = {n: source / n / 'docs/checklist.md' for n in views}
+    invoke('sync')
+
+    # A dirty project is paused while its neighbours keep importing and exporting.
+    local('docs_new.py', 'docs/late.md', '--type', 'plan', '--title', 'Late', '--by', 'human', cwd=alpha)
+    local('docs_new.py', 'docs/beta-late.md', '--type', 'plan', '--title', 'Beta late', '--by', 'human', cwd=beta)
+    commit(alpha, 'Add late doc')
+    commit(beta, 'Add beta late doc')
+    (alpha / 'scratch.txt').write_text('uncommitted\n')
+    views['alpha'].write_text(views['alpha'].read_text().replace('- [ ] A1 task', '- [x] A1 task'))
+    views['beta'].write_text(views['beta'].read_text().replace('- [ ] B1 task', '- [x] B1 task'))
+    alpha_head, beta_head = head(alpha), head(beta)
+    rc, out = invoke('sync')
+    status = (vault / '_folderwise-sync-status.md').read_text()
+    check('a dirty project is paused and reported while other projects import', rc == 1 and head(beta) != beta_head and '- [x] B1 task' in notes['beta'].read_text()
+          and head(alpha) == alpha_head and '- [ ] A1 task' in notes['alpha'].read_text() and 'uncommitted' in out, out)
+    check('other projects still export while one is paused', (vault / 'beta/docs/beta-late.md').exists() and not (vault / 'alpha/docs/late.md').exists())
+    check('the paused project keeps its pending phone edit and previous export', '- [x] A1 task' in views['alpha'].read_text())
+    check('the status report names the paused project', 'Paused projects: alpha.' in status and 'keep syncing' in status, status)
+    check('a paused project sends the attention alert, not an import count', 'needs attention' in bodies() and 'phone change' not in bodies(), bodies())
+    count_before = bodies().count('needs attention')
+    rc, out = invoke('sync')
+    check('an unchanged pause is not announced again', rc == 1 and bodies().count('needs attention') == count_before, bodies())
+    (alpha / 'scratch.txt').unlink()
+    rc, out = invoke('sync')
+    check('the paused project resumes once fixed', rc == 0 and '- [x] A1 task' in notes['alpha'].read_text() and (vault / 'alpha/docs/late.md').exists()
+          and 'Paused projects' not in (vault / '_folderwise-sync-status.md').read_text(), out)
+    check('imports notify with counts only', 'Folderwise applied 1 phone change(s) in 1 project(s).' in bodies() and 'A1' not in bodies(), bodies())
+
+    # An unsupported edit to a copied note pauses only that project.
+    mirror = vault / 'beta/docs/checklist.md'
+    saved = mirror.read_text()
+    mirror.write_text(saved.replace('B1 task', 'B1 edited'))
+    views['alpha'].write_text(views['alpha'].read_text().replace('- [x] A1 task', '- [ ] A1 task'))
+    rc, out = invoke('sync')
+    check('a bad copied-note edit pauses its project and names the file', rc == 1 and 'beta/docs/checklist.md: line' in out and '- [ ] A1 task' in notes['alpha'].read_text()
+          and 'Paused projects: beta.' in (vault / '_folderwise-sync-status.md').read_text(), out)
+    rc, out = invoke('resolve')
+    check('resolve lists files with pending phone edits', rc == 0 and 'PENDING beta/docs/checklist.md' in out, out)
+    rc, out = invoke('resolve', 'alpha/docs/checklist.md')
+    check('resolve refuses a file without a pending edit', rc == 1 and 'no pending phone edit' in out, out)
+    rc, out = invoke('resolve', 'beta/docs/checklist.md')
+    stash = [p.read_text() for p in (home / 'rejected').rglob('*') if p.is_file()]
+    check('resolve saves the phone text and restores the Mac version', rc == 0 and mirror.read_text() == saved and any('B1 edited' in text for text in stash), out)
+    rc, out = invoke('sync')
+    check('the project resumes after resolve', rc == 0 and 'Paused projects' not in (vault / '_folderwise-sync-status.md').read_text(), out)
+    rc, out = invoke('resolve')
+    check('resolve reports when nothing is pending', rc == 0 and 'No pending phone edits.' in out, out)
+
+    # An adapter validation failure pauses only that project; the same edit imports once it recovers.
+    views['alpha'].write_text(views['alpha'].read_text().replace('- [ ] A1 task', '- [x] A1 task'))
+    views['gamma'].write_text(views['gamma'].read_text().replace('- [ ] G1 task', '- [x] G1 task'))
+    gamma_head = head(gamma)
+    rc, out = invoke('sync', extra={'IBRIDGE_FAIL_VALIDATE': '1'})
+    check('an adapter failure pauses only that project', rc == 1 and 'validation refused' in out and head(gamma) == gamma_head
+          and '- [x] A1 task' in notes['alpha'].read_text() and 'row-1,G1 task,false' in (gamma / 'data/tasks.csv').read_text(), out)
+    rc, out = invoke('sync')
+    check('the adapter project imports after the failure clears', rc == 0 and 'row-1,G1 task,true' in (gamma / 'data/tasks.csv').read_text(), out)
+
+    # A project that cannot be inventoried keeps its previous export instead of being removed.
+    before = sorted(p.relative_to(vault).as_posix() for p in (vault / 'delta').rglob('*') if p.is_file())
+    broken = delta / 'docs/broken.md'
+    local('docs_new.py', 'docs/broken.md', '--type', 'plan', '--title', 'Broken', '--by', 'human', cwd=delta)
+    broken.write_text(broken.read_text().replace('## Change Log', '![escape](../../outside.png)\n\n## Change Log'))
+    local('docs_stamp.py', 'docs/broken.md', '--by', 'human', '--summary', 'Add escaping link', cwd=delta)
+    commit(delta, 'Add an escaping link')
+    views['beta'].write_text(views['beta'].read_text().replace('- [ ] B1 task', '- [x] B1 task'))
+    rc, out = invoke('sync')
+    after = sorted(p.relative_to(vault).as_posix() for p in (vault / 'delta').rglob('*') if p.is_file())
+    check('an uninventoriable project is paused without losing its export', rc == 1 and 'unsafe path' in out and after == before
+          and views['delta'].exists() and '- [x] B1 task' in notes['beta'].read_text(), out)
+    broken.unlink()
+    commit(delta, 'Remove the escaping link')
+    rc, out = invoke('sync')
+    check('the project resumes after the inventory problem is fixed', rc == 0 and (vault / 'delta/docs/checklist.md').exists(), out)
+
+    # plan previews pending phone edits without changing anything.
+    views['alpha'].write_text(views['alpha'].read_text().replace('- [x] A1 task', '- [ ] A1 task'))
+    views['beta'].write_text(views['beta'].read_text().replace('B1 task', 'B1 renamed'))
+    heads, vault_text = {n: head(source / n) for n in views}, views['alpha'].read_text()
+    rc, out = invoke('plan')
+    check('plan previews a pending toggle', rc == 0 and 'PHONE EDIT alpha: would toggle 1 and rename 0 task(s)' in out, out)
+    check('plan previews a rejected edit without applying it', 'PHONE EDIT REJECTED _Folderwise Tasks/beta.md: line' in out and 'title edits are off' in out, out)
+    check('plan changes nothing', {n: head(source / n) for n in views} == heads and views['alpha'].read_text() == vault_text
+          and 'B1 renamed' in views['beta'].read_text() and not (home / 'export.json').exists(), out)
+    rc, out = invoke('sync')
+    check('the planned edits apply on the next sync', '- [ ] A1 task' in notes['alpha'].read_text() and 'B1 renamed' not in views['beta'].read_text(), out)
+
+    # The default notification mode stays quiet about imports.
+    invoke('configure', '--notifications', 'errors')
+    count = bodies().count('phone change')
+    views['alpha'].write_text(views['alpha'].read_text().replace('- [ ] A1 task', '- [x] A1 task'))
+    rc, out = invoke('sync')
+    check('errors mode does not announce routine imports', rc == 0 and bodies().count('phone change') == count, bodies())
+
+
 def s_ibridge_setup():
     """Verify explicit vault setup, persistent project defaults, and safe uninstall."""
     root=CTX['root']/'obsidian-setup-sandbox';source=root/'source';source.mkdir(parents=True)
@@ -1760,7 +1923,7 @@ SECTIONS = [
     ("create", s_create), ("new_doc", s_new_doc_and_index), ("stamp", s_stamp_and_hook), ("hook", s_hook_fail_closed),
     ("lint", s_lint_rules), ("timezone", s_timezone), ("links", s_links), ("toc", s_toc), ("mv", s_mv),
     ("tables", s_tables), ("stale", s_stale_index_recent), ("sync", s_sync),
-    ("ibridge", s_ibridge), ("ibridge_rename", s_ibridge_rename), ("ibridge_setup", s_ibridge_setup), ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache),
+    ("ibridge", s_ibridge), ("ibridge_rename", s_ibridge_rename), ("ibridge_isolation", s_ibridge_isolation), ("ibridge_setup", s_ibridge_setup), ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache),
     ("framework_checkout", s_framework_checkout), ("framework_index", s_framework_index), ("ci_allowlist", s_ci_allowlist),
 ]
 
