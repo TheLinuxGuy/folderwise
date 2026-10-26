@@ -1131,13 +1131,47 @@ elif op=='validate':
 
     # Fake OS executables exercise notification/scheduling CLI without touching launchd.
     fake=root/'fakebin';fake.mkdir()
-    for executable in ['osascript','launchctl']:
+    for executable in ['open','codesign','launchctl']:
         f=fake/executable
         f.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "'+str(root/'os-calls')+'"\nexit 0\n');f.chmod(0o755)
+    opener=fake/'open'
+    opener.write_text(opener.read_text().replace('exit 0', 'cat "'+str(home/'notification-message.txt')+'" > "'+str(root/'notification-body')+'"\ncat "'+str(home/'notification-message.txt')+'" >> "'+str(root/'os-calls')+'"\nexit 0'))
+    compiler=fake/'osacompile'
+    compiler.write_text('#!'+sys.executable+'\nimport pathlib,plistlib,sys\np=pathlib.Path(sys.argv[2])/"Contents"\n(p/"Resources").mkdir(parents=True)\n(p/"Info.plist").write_bytes(plistlib.dumps({"CFBundleName":"applet","CFBundleIconName":"applet"}))\n(p/"Resources/Assets.car").write_bytes(b"compiler icon catalog")\n(p/"Resources/main.scpt").write_bytes(pathlib.Path(sys.argv[3]).read_bytes())\n')
+    compiler.chmod(0o755)
     env={'PATH':str(fake)+os.pathsep+os.environ['PATH']}
     sandbox_env = env
     rc,out=invoke('notify-test',env=env)
-    check('notification helper uses built-in script host with data arguments',rc==0 and 'display notification' in (root/'os-calls').read_text(),out)
+    app=home/'Folderwise iBridge.app'
+    metadata=plistlib.loads((app/'Contents/Info.plist').read_bytes())
+    icon=app/'Contents/Resources/Folderwise.icns'
+    check('notification app bundles the Folderwise identity and icon',rc==0
+          and metadata['CFBundleIdentifier']=='org.folderwise.ibridge.notifications'
+          and metadata['CFBundleIconFile']=='Folderwise.icns' and metadata['LSUIElement'] and 'CFBundleIconName' not in metadata
+          and icon.read_bytes()==(CTX['tools']/'ibridge_assets/folderwise.icns').read_bytes()
+          and (app/'Contents/Resources/applet.icns').read_bytes()==icon.read_bytes()
+          and not (app/'Contents/Resources/Assets.car').exists(),out)
+    check('notification app launches and clears the message handoff', '-W -n -g '+str(app) in (root/'os-calls').read_text() and not (home/'notification-message.txt').exists(),out)
+    check('notification text is handed off as UTF-8 data', (root/'notification-body').read_text()=='Folderwise iBridge notifications work.',out)
+    compiled=icon.stat().st_mtime_ns
+    rc,out=invoke('notify-test',env=env)
+    check('unchanged notification app is reused',rc==0 and icon.stat().st_mtime_ns==compiled,out)
+    manifest=home/'notifier.json'
+    saved=json.loads(manifest.read_text());saved['version']='previous release';manifest.write_text(json.dumps(saved))
+    signer=fake/'codesign';signer_body=signer.read_text();signer.write_text('#!/bin/sh\nexit 1\n')
+    rc,out=invoke('notify-test',env=env)
+    check('failed notification app update preserves the installed bundle',rc==1 and icon.stat().st_mtime_ns==compiled,out)
+    signer.write_text(signer_body)
+    rc,out=invoke('notify-test',env=env)
+    check('notification app updates when bundled inputs change',rc==0 and json.loads(manifest.read_text())['version']!='previous release',out)
+    original=icon.read_bytes();icon.write_bytes(b'user customization')
+    rc,out=invoke('notify-test',env=env)
+    check('customized notification app is preserved and delivery fails safely',rc==1 and icon.read_bytes()==b'user customization',out)
+    rc,out=invoke('uninstall',env=env)
+    check('uninstall preserves customized notification app',rc==0 and app.exists(),out)
+    icon.write_bytes(original)
+    # Restore installed state after the preservation check.
+    invoke('setup','--source',str(source),'--vault',str(vault),'--no-schedule',env=env)
     if sys.platform=='darwin':
         cfg=json.loads(conf.read_text());cfg['launchagents_dir']=str(root/'LaunchAgents');cfg['notifications']='errors';conf.write_text(json.dumps(cfg))
         rc,out=invoke('schedule-enable',env=env)
@@ -1226,7 +1260,7 @@ elif op=='validate':
         rc,out=invoke('doctor',env=env);check('doctor diagnoses stale scheduled runs',rc==1 and 'stale' in out,out)
         invoke('schedule-disable',env=env)
     # Explicit notification failure is diagnostic and never mutates task records.
-    (fake/'osascript').write_text('#!/bin/sh\nexit 1\n')
+    (fake/'open').write_text('#!/bin/sh\nexit 1\n')
     rc,out=invoke('notify-test',env=env)
     check('notification failure is reported by the explicit test command',rc==1 and 'delivery failed' in out,out)
     (home/'bridge.log').write_text('old log\n'*150000)
@@ -1307,7 +1341,7 @@ elif op=='validate':
     rc,out=tool('icloud_bridge.py','--config',root/'empty-state/config.json','setup')
     check('setup requires explicit source and vault',rc==1 and 'requires --source and --vault' in out,out)
     rc,out=invoke('uninstall')
-    check('uninstall cleans fully owned empty configuration folders',rc==0 and not (vault/'.obsidian').exists() and not (source/'.obsidian').exists() and not launcher.exists(),out)
+    check('uninstall cleans fully owned empty configuration folders',rc==0 and not (vault/'.obsidian').exists() and not (source/'.obsidian').exists() and not launcher.exists() and not app.exists() and not (home/'notifier.json').exists(),out)
     launcher.write_text('#!/bin/sh\n# user-owned customization\n')
     rc,out=invoke('uninstall')
     check('uninstall preserves a customized launch entry point',rc==0 and launcher.read_text()=='#!/bin/sh\n# user-owned customization\n',out)
@@ -1325,8 +1359,13 @@ def s_ibridge_setup():
     sh(['git','init','-q','-b','main'],cwd=source);sh(['git','add','-A'],cwd=source);sh(['git','commit','-qm','Fixture framework'],cwd=source)
     sh(['git','remote','add','origin',str(source)],cwd=source)
     fake=root/'fakebin';fake.mkdir()
-    for name in ['osascript','launchctl']:
+    for name in ['open','codesign','launchctl']:
         p=fake/name;p.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "'+str(root/'os-calls')+'"\nexit 0\n');p.chmod(0o755)
+    opener=fake/'open'
+    opener.write_text(opener.read_text().replace('exit 0', 'cat "'+str(home/'notification-message.txt')+'" > "'+str(root/'notification-body')+'"\ncat "'+str(home/'notification-message.txt')+'" >> "'+str(root/'os-calls')+'"\nexit 0'))
+    compiler=fake/'osacompile'
+    compiler.write_text('#!'+sys.executable+'\nimport pathlib,plistlib,sys\np=pathlib.Path(sys.argv[2])/"Contents"\n(p/"Resources").mkdir(parents=True)\n(p/"Info.plist").write_bytes(plistlib.dumps({"CFBundleName":"applet","CFBundleIconName":"applet"}))\n(p/"Resources/Assets.car").write_bytes(b"compiler icon catalog")\n(p/"Resources/main.scpt").write_bytes(pathlib.Path(sys.argv[3]).read_bytes())\n')
+    compiler.chmod(0o755)
     env={'PATH':str(fake)+os.pathsep+os.environ['PATH'],'HOME':str(root/'fake-home')}
 
     def local(name,*args):

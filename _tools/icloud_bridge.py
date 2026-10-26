@@ -429,13 +429,91 @@ def import_project(settings, project, wanted, baseline, current, home):
             shutil.rmtree(clone)
 
 
-def notify(message):
-    script = 'on run argv\ndisplay notification (item 1 of argv) with title "Folderwise iBridge"\nend run'
+NOTIFIER_NAME = 'Folderwise iBridge.app'
+NOTIFIER_INFO = {'CFBundleIdentifier': 'org.folderwise.ibridge.notifications',
+                 'CFBundleDisplayName': 'Folderwise iBridge', 'CFBundleName': 'Folderwise iBridge',
+                 'CFBundleIconFile': 'Folderwise.icns', 'CFBundleVersion': '2', 'LSUIElement': True}
+NOTIFIER_SCRIPT = '''on run
+try
+    set messagePath to (POSIX path of (path to me)) & "../notification-message.txt"
+    set notificationText to read POSIX file messagePath as «class utf8»
+    display notification notificationText with title "Folderwise iBridge"
+end try
+end run
+'''
+
+
+def notifier_files(app):
+    """Fingerprint the generated bundle so updates/uninstall preserve user edits."""
+    files = {}
+    for item in sorted(app.rglob('*')):
+        if item.is_symlink():
+            raise ValueError('notification app contains a symlink')
+        if item.is_file():
+            files[item.relative_to(app).as_posix()] = digest(item.read_bytes())
+    return files
+
+
+def prepare_notifier(home):
+    """Compile Apple's script app locally; no download, launch or banner."""
+    app = safe(home, NOTIFIER_NAME)
+    manifest = safe(home, 'notifier.json')
+    previous = read_json(manifest, {})
+    icon = TOOLS / 'ibridge_assets/folderwise.icns'
+    version = digest(NOTIFIER_SCRIPT.encode() + icon.read_bytes() + plistlib.dumps(NOTIFIER_INFO))
+    if app.exists():
+        if not previous.get('files') or notifier_files(app) != previous['files']:
+            raise ValueError('notification app has custom content; preserve it before rebuilding')
+        if previous.get('version') == version:
+            return app
+    with tempfile.TemporaryDirectory(dir=home, prefix='.notifier-') as temp:
+        script = Path(temp) / 'notify.applescript'
+        script.write_text(NOTIFIER_SCRIPT)
+        built = Path(temp) / NOTIFIER_NAME
+        run(['osacompile', '-o', built, script])
+        info = built / 'Contents/Info.plist'
+        metadata = plistlib.loads(info.read_bytes())
+        metadata.pop('CFBundleIconName', None)
+        metadata.update(NOTIFIER_INFO)
+        # osacompile ships an asset catalog that otherwise overrides IconFile.
+        (built / 'Contents/Resources/Assets.car').unlink(missing_ok=True)
+        atomic(info, plistlib.dumps(metadata))
+        shutil.copyfile(icon, built / 'Contents/Resources/Folderwise.icns')
+        shutil.copyfile(icon, built / 'Contents/Resources/applet.icns')
+        run(['codesign', '--force', '--sign', '-', built])
+        files = notifier_files(built)
+        if app.exists():
+            shutil.rmtree(app)
+        built.replace(app)
+        save(manifest, {'version': version, 'files': files})
+    return app
+
+
+def notify(message, home):
     try:
-        run(["osascript", "-e", script, message])
+        app = prepare_notifier(home)
+        # Script apps do not receive open's command-line arguments. Hand off
+        # UTF-8 data outside the signed bundle; never compile message text.
+        message_file = safe(home, 'notification-message.txt')
+        atomic(message_file, message.encode('utf-8'))
+        try:
+            run(['open', '-W', '-n', '-g', app])
+        finally:
+            message_file.unlink(missing_ok=True)
         return True
     except (ValueError, OSError):
         return False
+
+
+def remove_notifier(home):
+    app = safe(home, NOTIFIER_NAME)
+    manifest = safe(home, 'notifier.json')
+    if app.exists():
+        if notifier_files(app) != read_json(manifest, {}).get('files'):
+            print('Preserved customized notification app: ' + str(app))
+            return
+        shutil.rmtree(app)
+    manifest.unlink(missing_ok=True)
 
 
 def report(files, omissions, issues, settings, managed_bytes):
@@ -603,7 +681,7 @@ def sync(settings, home, dry=False):
     actionable = [item for item in omissions if item['reason'] != 'excluded by lean mode']
     signature = digest(json.dumps([issues, actionable], sort_keys=True).encode())
     if settings['notifications'] == 'errors' and (issues or actionable) and previous.get('issue_signature') != signature:
-        last['notification_sent'] = notify('Folderwise bridge needs attention. See Bridge Status.md in your vault.')
+        last['notification_sent'] = notify('Folderwise bridge needs attention. See Bridge Status.md in your vault.', home)
     last['issue_signature'] = signature
     save(home / 'last-run.json', last)
     with (home / 'bridge.log').open('a') as log:
@@ -668,7 +746,7 @@ def schedule(settings, config_path, enable):
     run(["launchctl", "bootstrap", domain, path])
     message = f"folderwise-ibridge is now enabled. Sync job is running and scheduled every {settings['interval_minutes']} minutes."
     save(config_path.parent / "schedule.json", {"enabled": True, "interval_minutes": settings["interval_minutes"]})
-    if settings["notifications"] != "off" and not notify(message):
+    if settings["notifications"] != "off" and not notify(message, config_path.parent):
         print("Notification could not be sent; check macOS notification settings. Scheduling succeeded.")
     print(message)
 
@@ -790,6 +868,7 @@ def uninstall_bridge(settings, path):
     settings['enabled'] = False
     save(path, settings)
     remove_launcher(home)
+    remove_notifier(home)
     marker = safe(Path(settings['source']), '.folderwise-obsidian.json')
     profile = read_json(marker, {})
     if profile.get('bridge_config') == str(path):
@@ -904,8 +983,8 @@ def main():
                 if args.command == "schedule-enable" and sync(settings, path.parent):
                     raise ValueError("resolve sync errors before scheduling")
             elif args.command == "notify-test":
-                if not notify("Folderwise iBridge notifications work."):
-                    raise ValueError("notification delivery failed (macOS/osascript required)")
+                if not notify("Folderwise iBridge notifications work.", path.parent):
+                    raise ValueError("notification delivery failed (macOS notification app required)")
             elif args.command == "doctor":
                 files, _, omissions = inventory(settings)
                 for key in files:
