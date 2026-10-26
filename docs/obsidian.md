@@ -172,6 +172,14 @@ uv run _tools/icloud_bridge.py schedule-prepare
 
 This writes the owned entry point under the local state directory's `bin/` and a `launchagent-preview.plist` beside the config. It works on Mac and Linux for review/testing; actual job registration still requires macOS. Preparation refuses to replace a customized entry point. `schedule-enable` prepares it automatically and upgrades existing jobs that launched `uv` directly. Uninstall removes an unchanged generated entry point and preserves one that has been customized.
 
+**Mac alerts when sync needs attention.** The bridge confirms setup and sends a summary when a run detects new conflicts, failed imports, or image-budget omissions. Open the vault’s `Bridge Status.md` for details; routine successful runs stay quiet.
+
+![Folderwise iBridge setup notification on macOS confirming a five-minute schedule](assets/ibridge-macos-notification.png)
+
+*Actual setup confirmation from the fictional test bridge. Sync issue alerts use the same Folderwise name and logo.*
+
+Alerts require a running bridge. Use `doctor` to check for missing or stale scheduled runs; a stopped job or an offline Mac cannot send an alert.
+
 The default interval is five minutes. `schedule-enable` runs a foreground sync first, registers the job, then announces: **folderwise-ibridge is now enabled. Sync job is running and scheduled every X minutes.** The first setup notification also lets you check visibility. Change the interval and reload the schedule with:
 
 ```sh

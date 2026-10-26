@@ -7,3 +7,5 @@ The Obsidian screenshot is an unedited app-window capture from a disposable demo
 The three SVG badges contain static, factual project metadata. They do not claim a CI result or publication status.
 
 The notification icon in `_tools/ibridge_assets/folderwise.icns` derives from `folderwise-logo.png`. Transparent pixels below alpha 13 were trimmed, the artwork fitted within a 900-pixel square on a transparent 1024-pixel canvas, then resized for macOS standard/Retina icon sizes. The original artwork is unchanged.
+
+`ibridge-macos-notification.png` is the project owner’s real macOS setup-success notification from the fictional bridge test. It was cropped from `SCR-20261025-prno.png` to remove surrounding desktop space; the logo, message, colors, and notification UI were not altered. It shows setup confirmation, not an error alert.
