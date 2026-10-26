@@ -150,6 +150,16 @@ uv run _tools/icloud_bridge.py doctor
 uv run _tools/icloud_bridge.py logs
 ```
 
+The job launches through a private executable named **`folderwise-ibridgesync`**, so macOS Login Items identifies Folderwise rather than the shared `uv` runtime. The job label remains `org.folderwise.ibridge`. `uv` is still a dependency; its installed binary is not renamed or modified. macOS still shows its normal background-item notification and provides the normal on/off control. File-access prompts may name the runtime that actually reads the files. See [Apple's attribution rules](https://developer.apple.com/documentation/servicemanagement/updating-helper-executables-from-earlier-versions-of-macos).
+
+For an inspectable preparation step without registering or enabling a job:
+
+```sh
+uv run _tools/icloud_bridge.py schedule-prepare
+```
+
+This writes the owned entry point under the local state directory's `bin/` and a `launchagent-preview.plist` beside the config. It works on Mac and Linux for review/testing; actual job registration still requires macOS. Preparation refuses to replace a customized entry point. `schedule-enable` prepares it automatically and upgrades existing jobs that launched `uv` directly. Uninstall removes an unchanged generated entry point and preserves one that has been customized.
+
 The default interval is five minutes. `schedule-enable` runs a foreground sync first, registers the job, then announces: **folderwise-ibridge is now enabled. Sync job is running and scheduled every X minutes.** The first setup notification also lets you check visibility. Change the interval and reload the schedule with:
 
 ```sh
@@ -159,7 +169,7 @@ uv run _tools/icloud_bridge.py notify-test
 uv run _tools/icloud_bridge.py schedule-disable
 ```
 
-The user must remain logged in. Sleep can skip interval firings; periodic runs resume after wake. The job does not overlap itself. Only one scheduled bridge installation per macOS user is supported. Re-running `schedule-enable` reloads the owned job; it refuses to replace another configuration's job. Disabling preserves vault content and local state.
+The user must remain logged in. Background helpers may need one-time macOS file-access consent for protected folders such as Documents. For fictional testing, a source/state folder under your home directory avoids needing broad Documents-folder access; keep the separate mobile vault in iCloud. Sleep can skip interval firings; periodic runs resume after wake. The job does not overlap itself. Only one scheduled bridge installation per macOS user is supported. Re-running `schedule-enable` reloads the owned job; it refuses to replace another configuration's job. Disabling preserves vault content and local state.
 
 Notifications use macOS's built-in script host and are best effort. New conflicts, failed imports and image-budget omissions produce a summary; routine success and unchanged issues stay quiet. Intentional lean exclusions do not generate alerts. Banners contain no document/task content. Focus or notification permissions can suppress them; a successful script invocation does not prove a banner appeared. See [Apple's notification scripting guide](https://developer.apple.com/library/archive/documentation/LanguagesUtilities/Conceptual/MacAutomationScriptingGuide/DisplayNotifications.html). Branded notifications and custom action buttons are outside this release.
 

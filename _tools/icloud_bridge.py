@@ -6,7 +6,7 @@
 """Folderwise iCloud bridge: Mac-owned export and boolean task import.
 
 Commands: setup, configure, plan, sync, status, enable, disable, schedule-enable,
-schedule-disable, doctor, logs, notify-test, vault-init, uninstall. See docs/obsidian.md before setup.
+schedule-disable, schedule-prepare, doctor, logs, notify-test, vault-init, uninstall. See docs/obsidian.md before setup.
 """
 from __future__ import annotations
 
@@ -34,6 +34,8 @@ import docslib as dl  # noqa: E402
 
 TOOLS = Path(__file__).resolve().parent
 LABEL = "org.folderwise.ibridge"
+LAUNCHER_NAME = "folderwise-ibridgesync"
+LAUNCHER_BODY = b'#!/bin/sh\n# Folderwise iCloud bridge launch entry point.\nexec "$@"\n'
 REPORT, DASHBOARD, TASK_DIR = "Bridge Status.md", "Tasks.md", "_Folderwise Tasks"
 IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif", ".heic", ".bmp"}
 SKIP = {"AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", "_doc-template.md", "node_modules", "__pycache__", "#recycle", "credentials.json", "id_rsa", "id_ed25519"}
@@ -612,6 +614,35 @@ def sync(settings, home, dry=False):
         print('ERROR ' + issue)
     return 1 if issues else 0
 
+def prepare_schedule(settings, config_path):
+    """Prepare an owned named entry point and plist preview, without OS registration."""
+    launcher = safe(config_path.parent, 'bin/' + LAUNCHER_NAME)
+    if launcher.exists() and launcher.read_bytes() != LAUNCHER_BODY:
+        raise ValueError('launch entry point has custom content; preserve or restore it before scheduling')
+    if not launcher.exists():
+        atomic(launcher, LAUNCHER_BODY)
+    launcher.chmod(0o700)
+    uv = shutil.which("uv")
+    if not uv:
+        raise ValueError("uv not found")
+    plist = {"Label": LABEL, "ProgramArguments": [str(launcher), uv, "run", "--quiet", str(TOOLS / "icloud_bridge.py"), "--config", str(config_path), "sync"],
+             "StartInterval": settings["interval_minutes"] * 60, "RunAtLoad": True, "WorkingDirectory": str(TOOLS.parent),
+             "EnvironmentVariables": {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "UV_CACHE_DIR": str(config_path.parent / "uv-cache")},
+             "StandardOutPath": str(config_path.parent / "launchd.log"), "StandardErrorPath": str(config_path.parent / "launchd-error.log")}
+    preview = config_path.parent / 'launchagent-preview.plist'
+    atomic(preview, plistlib.dumps(plist))
+    return plist
+
+
+def remove_launcher(home):
+    launcher = safe(home, 'bin/' + LAUNCHER_NAME)
+    if launcher.exists():
+        if launcher.read_bytes() == LAUNCHER_BODY:
+            launcher.unlink()
+        else:
+            print('Preserved customized launch entry point: ' + str(launcher))
+
+
 def schedule(settings, config_path, enable):
     if sys.platform != "darwin":
         raise ValueError("scheduling requires macOS; use sync manually on other systems")
@@ -630,13 +661,7 @@ def schedule(settings, config_path, enable):
         save(config_path.parent / "schedule.json", {"enabled": False})
         print("Scheduled bridge disabled; vault and local state preserved.")
         return
-    uv = shutil.which("uv")
-    if not uv:
-        raise ValueError("uv not found")
-    plist = {"Label": LABEL, "ProgramArguments": [uv, "run", "--quiet", str(TOOLS / "icloud_bridge.py"), "--config", str(config_path), "sync"],
-             "StartInterval": settings["interval_minutes"] * 60, "RunAtLoad": True, "WorkingDirectory": str(TOOLS.parent),
-             "EnvironmentVariables": {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "UV_CACHE_DIR": str(config_path.parent / "uv-cache")},
-             "StandardOutPath": str(config_path.parent / "launchd.log"), "StandardErrorPath": str(config_path.parent / "launchd-error.log")}
+    plist = prepare_schedule(settings, config_path)
     atomic(path, plistlib.dumps(plist))
     run(["launchctl", "enable", domain + "/" + LABEL])
     subprocess.run(["launchctl", "bootout", domain + "/" + LABEL], capture_output=True)
@@ -764,6 +789,7 @@ def uninstall_bridge(settings, path):
         schedule(settings, path, False)
     settings['enabled'] = False
     save(path, settings)
+    remove_launcher(home)
     marker = safe(Path(settings['source']), '.folderwise-obsidian.json')
     profile = read_json(marker, {})
     if profile.get('bridge_config') == str(path):
@@ -811,7 +837,7 @@ def main():
     ap.add_argument("--max-images-total-bytes", type=int)
     ap.add_argument("--unlimited-images", action="store_true")
     ap.add_argument("--notifications", choices=["off", "errors"])
-    ap.add_argument("command", choices=["setup", "configure", "plan", "sync", "status", "enable", "disable", "schedule-enable", "schedule-disable", "doctor", "logs", "notify-test", "vault-init", "uninstall"])
+    ap.add_argument("command", choices=["setup", "configure", "plan", "sync", "status", "enable", "disable", "schedule-enable", "schedule-disable", "doctor", "logs", "notify-test", "vault-init", "uninstall", "schedule-prepare"])
     ap.add_argument("project", nargs="?")
     args = ap.parse_args()
     path = args.config.expanduser().absolute()
@@ -870,6 +896,10 @@ def main():
                 return 0
             if args.command in {"sync", "plan"}:
                 return sync(settings, path.parent, args.command == "plan")
+            if args.command == 'schedule-prepare':
+                prepare_schedule(settings, path)
+                print('Prepared named launcher and preview at ' + str(path.parent / 'launchagent-preview.plist'))
+                return 0
             if args.command.startswith("schedule-") or args.command == "setup":
                 if args.command == "schedule-enable" and sync(settings, path.parent):
                     raise ValueError("resolve sync errors before scheduling")

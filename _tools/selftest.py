@@ -1107,6 +1107,28 @@ elif op=='validate':
     rc,out=invoke('sync')
     check('bridge refuses symlink destinations',rc==1 and 'symlink' in out,out)
     (vault/'alpha/docs/assets/a.png').unlink();invoke('sync')
+    # Prepare and execute the real named entry point without any OS registration.
+    import plistlib
+    rc,out=invoke('schedule-prepare')
+    preview=plistlib.loads((home/'launchagent-preview.plist').read_bytes())
+    launcher=Path(preview['ProgramArguments'][0])
+    check('schedule preparation creates the Folderwise-named executable',rc==0 and launcher.name=='folderwise-ibridgesync'
+          and os.access(launcher,os.X_OK) and str(conf) in preview['ProgramArguments'],out)
+    before=json.loads((home/'last-run.json').read_text())['last_run_epoch']
+    rc,out=sh(preview['ProgramArguments'],cwd=source)
+    check('prepared launch command runs a real foreground sync',rc==0 and json.loads((home/'last-run.json').read_text())['last_run_epoch']>before,out)
+    literal='a spaced value; $(this-must-remain-data)'
+    rc,out=sh([str(launcher),sys.executable,'-c','import sys; print(sys.argv[1])',literal],cwd=source)
+    check('named launcher preserves literal arguments without shell interpretation',rc==0 and out.strip()==literal,out)
+    owned=launcher.read_bytes();launcher.write_text('#!/bin/sh\n# user customization\n')
+    rc,out=invoke('schedule-prepare')
+    check('schedule preparation preserves an altered entry point',rc==1 and 'custom content' in out
+          and launcher.read_text()=='#!/bin/sh\n# user customization\n',out)
+    launcher.write_bytes(owned)
+    no_runtime=root/'no-runtime';no_runtime.mkdir()
+    rc,out=sh([sys.executable,str(CTX['tools']/'icloud_bridge.py'),'--config',str(conf),'schedule-prepare'],cwd=source,env={'PATH':str(no_runtime)})
+    check('schedule preparation diagnoses a missing runtime',rc==1 and 'uv not found' in out,out)
+
     # Fake OS executables exercise notification/scheduling CLI without touching launchd.
     fake=root/'fakebin';fake.mkdir()
     for executable in ['osascript','launchctl']:
@@ -1119,10 +1141,9 @@ elif op=='validate':
     if sys.platform=='darwin':
         cfg=json.loads(conf.read_text());cfg['launchagents_dir']=str(root/'LaunchAgents');cfg['notifications']='errors';conf.write_text(json.dumps(cfg))
         rc,out=invoke('schedule-enable',env=env)
-        import plistlib
         plist=plistlib.loads((root/'LaunchAgents/org.folderwise.ibridge.plist').read_bytes())
         calls=(root/'os-calls').read_text()
-        check('schedule registers isolated LaunchAgent and announces configured interval',rc==0 and plist['StartInterval']==300
+        check('schedule registers isolated LaunchAgent and announces configured interval',rc==0 and Path(plist['ProgramArguments'][0]).name=='folderwise-ibridgesync' and plist['StartInterval']==300
               and 'bootstrap' in calls and 'scheduled every 5 minutes' in calls,out)
         rc,out=invoke('schedule-disable',env=env)
         check('schedule disable removes only the owned job definition',rc==0 and not (root/'LaunchAgents/org.folderwise.ibridge.plist').exists(),out)
@@ -1286,7 +1307,10 @@ elif op=='validate':
     rc,out=tool('icloud_bridge.py','--config',root/'empty-state/config.json','setup')
     check('setup requires explicit source and vault',rc==1 and 'requires --source and --vault' in out,out)
     rc,out=invoke('uninstall')
-    check('uninstall cleans fully owned empty configuration folders',rc==0 and not (vault/'.obsidian').exists() and not (source/'.obsidian').exists(),out)
+    check('uninstall cleans fully owned empty configuration folders',rc==0 and not (vault/'.obsidian').exists() and not (source/'.obsidian').exists() and not launcher.exists(),out)
+    launcher.write_text('#!/bin/sh\n# user-owned customization\n')
+    rc,out=invoke('uninstall')
+    check('uninstall preserves a customized launch entry point',rc==0 and launcher.read_text()=='#!/bin/sh\n# user-owned customization\n',out)
 
 
 def s_ibridge_setup():

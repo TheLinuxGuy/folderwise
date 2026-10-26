@@ -436,6 +436,7 @@ uv run _tools/icloud_bridge.py doctor
 uv run _tools/icloud_bridge.py logs
 uv run _tools/icloud_bridge.py notify-test
 uv run _tools/icloud_bridge.py vault-init
+uv run _tools/icloud_bridge.py schedule-prepare
 uv run _tools/icloud_bridge.py schedule-disable
 uv run _tools/new_project.py --name offline-notes --description "Local-only notes" --icloud-disabled
 ```
@@ -452,3 +453,5 @@ python3 _tools/framework_checkout.py --minimal --omit README.md --remove-obsidia
 ```
 
 Bridge-local JSON configuration is separate from `.docs.yaml`: `version` is 1; `enabled` records installed integration state; `source` and `vault` are separate absolute directories; `mode` is full/lean; `interval_minutes` defaults to 5; `notifications` is errors/off; `max_image_bytes` and `max_images_total_bytes` are null for unlimited (zero means zero bytes). `adapters` maps project names to local argv arrays implementing list/apply/validate. `launchagents_dir` is an optional override for isolated scheduling tests. Configure limits with `--max-image-bytes` and `--max-images-total-bytes`, clear both with `--unlimited-images`, and inspect omissions/estimated export size in root-vault `Bridge Status.md`. These are file-size estimates, not actual iCloud account usage or billing.
+
+The scheduled entry point is named `folderwise-ibridgesync`, so macOS Login Items identifies the Folderwise helper instead of `uv`. Normal macOS background-item notifications and controls remain enabled. `schedule-prepare` writes the private executable and a reviewable `launchagent-preview.plist` without registering a job; `schedule-enable` does that automatically. Uninstall removes the unchanged generated entry point but preserves customizations. See the Obsidian guide for macOS attribution and file-access considerations.
