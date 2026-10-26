@@ -2651,6 +2651,30 @@ def s_ibridge_tasks():
     def head():
         return sh(['git', 'rev-parse', 'HEAD'], cwd=project)[1]
 
+    # Preview counts must distinguish description renames from metadata changes.
+    saved_view, saved_head = view.read_text(), head()
+    preview_view = saved_view.replace(row('Plain'), row('Plain').rstrip() + ' 📅 2026-12-01\n')
+    view.write_text(preview_view)
+    rc, out = invoke('plan')
+    check('plan distinguishes field edits from description renames', rc == 0 and
+          'would toggle 0 and rename 0 task(s); fields=1 recurrence=0 delete=0' in out, out)
+    check('field edit preview leaves source and phone bytes unchanged', head() == saved_head and
+          view.read_text() == preview_view, out)
+    view.write_text(saved_view)
+
+    def rejection_message(transform, reason):
+        rc, out = phone('Plain', transform)
+        return (rc == 0 and reason in out and head() == saved_head and view.read_text() == saved_view and
+                'PHONE-SECRET' not in (vault / '_folderwise-sync-status.md').read_text(), out)
+
+    check('text after a smart-quoted source link has a precise rejection', *rejection_message(
+        lambda line: line.replace('"fw:', '“fw:').replace('"))', '”))').rstrip() + ' PHONE-SECRET\n',
+        'description text belongs before the link'))
+    check('a removed generated source link has a precise rejection', *rejection_message(
+        lambda line: re.sub(r' \(\[source\]\([^\n]+?\)\)', '', line), 'task source link is missing or malformed'))
+    check('a corrupted generated identity has a precise rejection', *rejection_message(
+        lambda line: line.replace('"fw:', '"fw:0'), 'source link identity changed'))
+
     # Reconstruct a genuine schema-2 flat view with the former text-derived identities.
     state_path = home / 'state.json'
     state = json.loads(state_path.read_text())

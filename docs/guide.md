@@ -434,7 +434,7 @@ A fresh Folderwise installation creates no Obsidian vault and leaves bridge sync
 uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Folderwise" --dry-run
 uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Folderwise"
 uv run _tools/icloud_bridge.py configure --mode lean --interval-minutes 5
-uv run _tools/icloud_bridge.py plan            # also previews pending phone edits
+uv run _tools/icloud_bridge.py plan            # previews pending toggles, renames, fields, recurrence and deletion
 uv run _tools/icloud_bridge.py sync
 uv run _tools/icloud_bridge.py configure --text-edits on --edit-settle-seconds 120   # opt-in phone note edits (see folderwise-ibridgeedit)
 uv run _tools/icloud_bridge.py resolve         # list vault files with pending phone edits
@@ -464,6 +464,8 @@ python3 _tools/framework_checkout.py --minimal --omit README.md --remove-obsidia
 The `.docs.yaml` setting `folderwise-ibridgeedit` is a list of project-relative path patterns (`*` within a folder, `**` across folders; default none) naming the copied `.md` notes that may accept phone text edits, and it only takes effect when the bridge's `text_edits` switch is on. A quiet period (`edit_settle_seconds`), protected front matter and generated blocks, size and change limits, fast-forward-only application and Mac-conflict pausing apply; see [Edit notes from iPhone](obsidian.md#edit-notes-from-iphone-opt-in). Recent imports in the status report also show an *Edited* count.
 
 The `.docs.yaml` setting `folderwise-ibridgerename` is a boolean that defaults to false. When true, the project's generated task view also accepts task title edits from the phone (Markdown tasks and adapter tasks that advertise `editable: ["title"]`); see [Rename tasks from iPhone](obsidian.md#rename-tasks-from-iphone-opt-in) for the validation rules, commit provenance and conflict handling. A non-boolean value is rejected. A rejected edit to a generated view is saved privately on the Mac under the bridge state's `rejected/` folder (30 days), the view is restored, and the status report lists it; bridge state also keeps a small `ledger.json` of recent imports and rejections and records a `schema` version. The status report additionally lists recent imports and iCloud conflict copies. Brief iCloud file locks are retried on the next run instead of alerting.
+
+Generated-view rejection messages distinguish description text after a source link, a missing or malformed source link, and a changed link identity. Restore the complete original link rather than retyping it with phone smart punctuation. `plan` counts description renames separately from metadata field edits and also reports recurrence and deletion counts.
 
 Each sync validates project configurations once and reuses that snapshot for inventory, rename permissions and imports. An invalid timezone, malformed YAML, a non-boolean project flag, a symlink config or a project-specific read/adapter failure pauses that project and preserves its previous export; healthy projects continue. The status report and run diagnostics record the pause. `plan` still exits with an error for an invalid configuration or inventory. Setup remains strict about its selected projects.
 
