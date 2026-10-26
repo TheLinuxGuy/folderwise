@@ -92,7 +92,7 @@ Folderwise includes metadata and link validation, CSV-to-Markdown tables, genera
 | 🔎 `docs_index.py` / `docs_recent.py` / `docs_stale.py` | what exists, what changed lately, what is due for re-verification |
 | 🔀 `docs_mv.py` | moves or renames docs and headings and keeps every link valid |
 | 📊 `render_tables.py` | renders CSV files into Markdown tables |
-| ☁️ `icloud_bridge.py` | mirror projects into iCloud, complete tasks across projects on iPhone, and commit changes on Mac |
+| ☁️ `icloud_bridge.py` | mirror projects into iCloud, complete or rename tasks across projects on iPhone, and commit changes on Mac |
 | 🩺 `docs_doctor.py` / `sync_rules.py` | health-check projects; push the template's shared rules into them |
 
 Every tool, flag and setting is documented in the [full guide](docs/guide.md).
@@ -106,7 +106,7 @@ Every tool, flag and setting is documented in the [full guide](docs/guide.md).
 <sub>Obsidian demo with fictional notes. Cross-project links shown are demo-only; Folderwise currently validates links within each repository.</sub>
 
 
-Browse your docs in Obsidian and manage every project’s tasks from one iPhone dashboard. Check off a task on your phone; your Mac updates the source files and commits the change while keeping your repositories outside iCloud. [Set up Obsidian + iCloud →](docs/obsidian.md)
+Browse your docs in Obsidian and manage every project’s tasks from one iPhone dashboard. Check off a task on your phone (or, once a project opts in, rename it); your Mac updates the source files and commits the change while keeping your repositories outside iCloud. [Set up Obsidian + iCloud →](docs/obsidian.md)
 
 **🔔 Mac alerts when sync needs attention.** Receive setup confirmations and alerts for detected sync issues. Open your vault’s [_folderwise-sync-status.md](docs/obsidian.md#bridge-status-report) for details.
 

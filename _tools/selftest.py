@@ -1059,10 +1059,16 @@ def s_ibridge():
     check('retry after hook repair imports pending change', rc == 0 and '- [x] First task' in note.read_text(), out)
     view.write_text(view.read_text().replace('First task', 'Phone prose edit'))
     rc, out = invoke('sync')
-    check('unsupported phone edits are preserved and reported', rc == 1 and 'Phone prose edit' in view.read_text()
-          and 'only checkbox' in (vault / '_folderwise-sync-status.md').read_text(), out)
-    view.write_text(view.read_text().replace('Phone prose edit', 'First task'))
-    invoke('sync')
+    saved_edits = [p.read_text() for p in (home / 'rejected').rglob('*') if p.is_file()]
+    check('unsupported phone edits to a generated view are saved outside iCloud and the view is restored', rc == 0 and 'NOTICE' in out
+          and 'Phone prose edit' not in view.read_text() and '- [x] First task' in view.read_text()
+          and any('Phone prose edit' in text for text in saved_edits)
+          and not any(p.stat().st_mode & 0o077 for p in (home / 'rejected').rglob('*')), out)
+    status_text = (vault / '_folderwise-sync-status.md').read_text()
+    check('rejected phone edit is named in the status report', '## Phone edits not applied' in status_text and '_Folderwise Tasks/alpha.md' in status_text
+          and 'line 5' in status_text and 'only checkbox on/off changes are supported' in status_text, status_text)
+    rc, out = invoke('sync')
+    check('a restored view is not reported again', rc == 0 and 'NOTICE' not in out, out)
     # Adapter lives in project, uses a CSV, and hides completed rows in normal Markdown.
     (alpha / 'data/tasks.csv').write_text('id,title,done\nitem-1,CSV action,false\n')
     script = alpha / 'scripts/adapter.py'
@@ -1261,7 +1267,7 @@ elif op=='validate':
     local('docs_stamp.py','docs/checklist.md','--by','human','--summary','Concurrent prose',cwd=alpha)
     sh(['git','add','-A'],cwd=alpha);sh(['git','commit','-qm','Concurrent prose'],cwd=alpha)
     rc,out=invoke('sync')
-    check('duplicate task cannot be misidentified after a concurrent Mac edit',rc==1 and 'duplicate task moved' in out,out)
+    check('duplicate task cannot be misidentified after a concurrent Mac edit',rc==0 and 'duplicate task moved' in out and '- [ ] Duplicate' in view.read_text(),out)
     view.write_text(view.read_text().replace('- [x] Duplicate','- [ ] Duplicate',1));invoke('sync')
     view.write_text(view.read_text().replace('- [x] First task','- [ ] First task'))
     invoke('disable','alpha')
@@ -1351,7 +1357,7 @@ elif op=='validate':
     shutil.rmtree(child)
     # An extra phone line and a generated-source toggle are unsupported edits.
     saved=view.read_text();view.write_text(saved+'New phone line\n')
-    rc,out=invoke('sync');check('new phone lines are preserved instead of imported',rc==1 and 'only checkbox' in out,out)
+    rc,out=invoke('sync');check('new phone lines are saved and the view restored instead of imported',rc==0 and 'number of lines changed' in out and 'New phone line' not in view.read_text(),out)
     view.write_text(saved)
     saved=mirror.read_text();mirror.write_text(saved.replace('- [ ] CSV action','- [x] CSV action'))
     rc,out=invoke('sync');check('generated raw checkboxes require dashboard mappings',rc==1 and 'no authoritative task mapping' in out,out)
@@ -1362,7 +1368,7 @@ elif op=='validate':
     note.write_text(note.read_text().replace('First task','Renamed source task'))
     local('docs_stamp.py','docs/checklist.md','--by','human','--summary','Rename a source task',cwd=alpha)
     sh(['git','add','-A'],cwd=alpha);sh(['git','commit','-qm','Rename task'],cwd=alpha)
-    rc,out=invoke('sync');check('pending phone edits cannot target a disappeared task',rc==1 and 'changed or disappeared' in out,out)
+    rc,out=invoke('sync');check('pending phone edits cannot target a disappeared task',rc==0 and 'changed or disappeared' in out and 'Renamed source task' in view.read_text(),out)
     view.write_text(saved);invoke('sync')
     # Source already reflecting the requested state is an idempotent acknowledgement.
     saved=view.read_text();view.write_text(saved.replace('- [ ] Renamed source task','- [x] Renamed source task'))
@@ -1401,6 +1407,221 @@ elif op=='validate':
     launcher.write_text('#!/bin/sh\n# user-owned customization\n')
     rc,out=invoke('uninstall')
     check('uninstall preserves a customized launch entry point',rc==0 and launcher.read_text()=='#!/bin/sh\n# user-owned customization\n',out)
+
+
+def s_ibridge_rename():
+    """Phone title edits: opt-in renames for Markdown and adapter tasks, rejection paths, CRLF and conflict copies."""
+    root = CTX['root'] / 'rename-sandbox'
+    source, vault, home = root / 'source', root / 'vault', root / 'state'
+    source.mkdir(parents=True)
+    for name in ('_tools', '_template'):
+        shutil.copytree(CTX['root'] / name, source / name, ignore=shutil.ignore_patterns('__pycache__'))
+    conf = home / 'config.json'
+
+    def invoke(*args):
+        return tool('icloud_bridge.py', '--config', conf, *args)
+
+    def local(name, *args, cwd=None):
+        return sh(['uv', 'run', '--quiet', str(source / '_tools' / name), *map(str, args)], cwd=cwd or source)
+
+    def commit(project, message):
+        sh(['git', 'add', '-A'], cwd=project)
+        return sh(['git', 'commit', '-qm', message], cwd=project)
+
+    def adapter_script(editable, honor_title):
+        return ("import csv,json,sys\nfrom pathlib import Path\np=Path('data/tasks.csv')\nrows=list(csv.DictReader(p.open()))\nop=sys.argv[1]\n"
+                "if op=='list':\n print(json.dumps([dict(id=r['id'],title=r['title'],checked=r['done']=='true',path='docs/checklist.md'"
+                + (",editable=['title']" if editable else "") + ") for r in rows]))\n"
+                "elif op=='apply':\n for c in json.load(sys.stdin):\n  for r in rows:\n   if r['id']==c['id']:\n    r['done']='true' if c['checked'] else 'false'\n"
+                + ("    if 'title' in c:\n     assert r['title']==c['expected_title']\n     r['title']=c['title']\n" if honor_title else "")
+                + " with p.open('w',newline='') as f:\n  w=csv.DictWriter(f,fieldnames=['id','title','done']);w.writeheader();w.writerows(rows)\n"
+                " note=Path('docs/checklist.md');text=note.read_text();start=text.index('<!-- tasks:start -->');end=text.index('<!-- tasks:end -->')\n"
+                " note.write_text(text[:start]+'<!-- tasks:start -->\\n'+''.join('- [ ] '+r['title']+'\\n' for r in rows if r['done']=='false')+text[end:])\n")
+
+    for name in ('alpha', 'beta', 'gamma', 'delta'):
+        rc, out = local('new_project.py', '--name', name, '--description', 'Fictional rename test', '--no-prompt')
+        check('rename sandbox creates ' + name, rc == 0, out)
+    alpha = source / 'alpha'
+    rc, out = local('docs_new.py', 'docs/checklist.md', '--type', 'plan', '--title', 'Checklist', '--by', 'human', cwd=alpha)
+    note = alpha / 'docs/checklist.md'
+    note.write_text(note.read_text().replace('## Change Log', '- [ ] Alpha one\n- [ ] Beta two\n- [ ] Gamma three\n- [ ] See [the docs](https://example.com/x) now\n'
+                                                              '- [ ] Twin\n- [ ] Twin\n\n## Change Log'))
+    local('docs_stamp.py', 'docs/checklist.md', '--by', 'human', '--summary', 'Add tasks', cwd=alpha)
+    commit(alpha, 'Add test tasks')
+    for name, editable, honor in (('beta', True, True), ('gamma', False, True), ('delta', True, False)):
+        project = source / name
+        (project / 'data').mkdir(exist_ok=True)
+        (project / 'data/tasks.csv').write_text('id,title,done\nrow-1,CSV one,false\n')
+        (project / 'scripts').mkdir(exist_ok=True)
+        (project / 'scripts/adapter.py').write_text(adapter_script(editable, honor))
+        local('docs_new.py', 'docs/checklist.md', '--type', 'plan', '--title', 'Checklist', '--by', 'human', cwd=project)
+        doc = project / 'docs/checklist.md'
+        doc.write_text(doc.read_text().replace('## Change Log', '<!-- tasks:start -->\n- [ ] CSV one\n<!-- tasks:end -->\n\n## Change Log'))
+        local('docs_stamp.py', 'docs/checklist.md', '--by', 'human', '--summary', 'Add generated tasks', cwd=project)
+        commit(project, 'Add CSV adapter')
+    rc, out = invoke('setup', '--source', source, '--vault', vault, '--notifications', 'off', '--no-schedule')
+    cfg = json.loads(conf.read_text())
+    cfg['adapters'] = {n: [sys.executable, 'scripts/adapter.py'] for n in ('beta', 'gamma', 'delta')}
+    conf.write_text(json.dumps(cfg))
+    # Renames are opt-in: the default keeps today's checkbox-only behavior.
+    view = vault / '_Folderwise Tasks/alpha.md'
+    invoke('sync')
+    check('rename sandbox exports a schema-2 state', json.loads((home / 'state.json').read_text()).get('schema') == 2)
+    check('views of projects without the setting say only toggles are imported', 'Only checkbox toggles are imported' in view.read_text())
+    view.write_text(view.read_text().replace('- [ ] Alpha one', '- [ ] Alpha renamed'))
+    head = sh(['git', 'rev-parse', 'HEAD'], cwd=alpha)[1]
+    rc, out = invoke('sync')
+    check('title edits stay off until the project opts in', rc == 0 and 'title edits are off' in out and '- [ ] Alpha one' in view.read_text()
+          and 'Alpha renamed' not in note.read_text() and sh(['git', 'rev-parse', 'HEAD'], cwd=alpha)[1] == head, out)
+    for name in ('alpha', 'beta', 'gamma', 'delta'):
+        config = source / name / '.docs.yaml'
+        config.write_text(config.read_text() + '\nfolderwise-ibridgerename: ' + ('"yes"' if name == 'delta' else 'true') + '\n')
+    rc, out = invoke('sync')
+    check('a non-boolean rename setting is rejected', rc == 1 and 'folderwise-ibridgerename must be boolean' in out, out)
+    delta_config = source / 'delta/.docs.yaml'
+    delta_config.write_text(delta_config.read_text().replace('"yes"', 'true'))
+    for name in ('alpha', 'beta', 'gamma', 'delta'):
+        commit(source / name, 'Allow phone title edits')
+    rc, out = local('docs_doctor.py', cwd=alpha)
+    check('project doctor recognizes folderwise-ibridgerename', 'unknown key' not in out, out)
+    rc, out = invoke('sync')
+    check('opted-in views explain title edits', rc == 0 and 'title edits are imported' in view.read_text(), out)
+    # Markdown rename, rename plus toggle, then idempotence.
+    view.write_text(view.read_text().replace('- [ ] Alpha one', '- [x] Alpha renamed'))
+    rc, out = invoke('sync')
+    _, log = sh(['git', 'log', '-1', '--format=%s%n%B'], cwd=alpha)
+    check('phone rename with a toggle edits the source note once', rc == 0 and '- [x] Alpha renamed ' not in note.read_text() and '- [x] Alpha renamed\n' in note.read_text()
+          and 'Alpha one' not in note.read_text(), out)
+    check('rename commit has provenance, counts and no titles', 'Update tasks from Obsidian' in log and 'Bridge: folderwise-ibridge' in log
+          and 'Bridge-Ops: toggle=1 rename=1' in log and 'Alpha renamed' not in log and 'user-typed' in log, log)
+    check('rename stamps the note as human with a rename summary', 'updated_by: human' in note.read_text() and 'Toggle and rename tasks via Obsidian iCloud bridge' in note.read_text())
+    check('regenerated view carries the new title', '- [x] Alpha renamed (' in view.read_text())
+    status = (vault / '_folderwise-sync-status.md').read_text()
+    check('status report lists the import with its commit', '## Recent imports' in status and '| alpha |' in status and sh(['git', 'rev-parse', '--short', 'HEAD'], cwd=alpha)[1].strip() in status, status)
+    head = sh(['git', 'rev-parse', 'HEAD'], cwd=alpha)[1]
+    rc, out = invoke('sync')
+    check('unchanged sync after a rename creates no commit', rc == 0 and sh(['git', 'rev-parse', 'HEAD'], cwd=alpha)[1] == head, out)
+    view.write_text(view.read_text().replace('- [x] Alpha renamed', '- [ ] Alpha renamed'))
+    invoke('sync')
+    # Rejections never reach the source: swap, duplicate, markup, links, lossy title, length and a Mac-side rename.
+    def rejected(label, edit, expected, project=alpha, path=view):
+        before = sh(['git', 'rev-parse', 'HEAD'], cwd=project)[1]
+        path.write_text(edit(path.read_text()))
+        rc, out = invoke('sync')
+        check(label, rc == 0 and expected in out and sh(['git', 'rev-parse', 'HEAD'], cwd=project)[1] == before
+              and 'NOTICE' in out, out)
+    def swap(text):
+        return text.replace('Beta two', 'TMP').replace('Gamma three', 'Beta two').replace('TMP', 'Gamma three')
+    rejected('swapped titles are not read as two renames', swap, 'already used by another task')
+    rejected('renaming to an existing title is rejected', lambda s: s.replace('Beta two', 'Gamma three'), 'already used')
+    rejected('a title cannot hide generated-block markers', lambda s: s.replace('Beta two', 'Beta <!-- x:start -->'), 'comment markers')
+    rejected('a title cannot start a spreadsheet formula', lambda s: s.replace('Beta two', '=SUM(A1)'), 'start with')
+    rejected('a title cannot embed links', lambda s: s.replace('Beta two', 'Beta [x](http://example.com)'), 'links or images')
+    rejected('an over-long title is rejected', lambda s: s.replace('Beta two', 'B' * 201), 'characters')
+    rejected('invisible direction characters are rejected', lambda s: s.replace('Beta two', 'Beta \u202etwo'), 'direction')
+    rejected('removing the source link is rejected', lambda s: s.replace('Beta two ([source](../alpha/docs/checklist.md))', 'Beta two'), 'trailing source link')
+    rejected('a due date appended by the Tasks edit dialog is rejected', lambda s: s.replace('Beta two ([source](../alpha/docs/checklist.md))', 'Beta two ([source](../alpha/docs/checklist.md)) \U0001F4C5 2026-10-25'), 'trailing source link')
+    rejected('a task whose title has links cannot be renamed from the view', lambda s: s.replace('See the docs now', 'See the docs soon'), 'links or images')
+    rejected('duplicate tasks cannot be renamed', lambda s: s.replace('- [ ] Twin', '- [ ] Twin renamed', 1), 'share its title')
+    check('rejected text is saved on the Mac', sum(1 for p in (home / 'rejected').rglob('*') if p.is_file()) >= 10)
+    check('restored views match the Mac again', 'Beta two' in view.read_text() and 'TMP' not in view.read_text())
+    # A rename pending while the Mac renames the same task is a conflict.
+    view.write_text(view.read_text().replace('Beta two', 'Beta phone'))
+    note.write_text(note.read_text().replace('Beta two', 'Beta mac'))
+    local('docs_stamp.py', 'docs/checklist.md', '--by', 'human', '--summary', 'Rename on Mac', cwd=alpha)
+    commit(alpha, 'Rename on Mac')
+    rc, out = invoke('sync')
+    check('a rename pending during a Mac rename is a reported conflict', rc == 0 and 'changed or disappeared on Mac' in out and 'Beta mac' in view.read_text()
+          and 'Beta phone' not in note.read_text(), out)
+    # Renames inside mirrored notes are still toggle-only, with a named error.
+    mirror = vault / 'alpha/docs/checklist.md'
+    saved = mirror.read_text()
+    mirror.write_text(saved.replace('Gamma three', 'Gamma edited'))
+    rc, out = invoke('sync')
+    check('mirrored note title edits freeze with the file and line named', rc == 1 and 'alpha/docs/checklist.md: line' in out and 'only checkbox' in out, out)
+    mirror.write_text(saved)
+    rc, out = invoke('sync')
+    check('restoring the note recovers', rc == 0, out)
+    head = sh(['git', 'rev-parse', 'HEAD'], cwd=alpha)[1]
+    view.write_text(view.read_text().replace('Gamma three (', 'Gamma three  ('))
+    rc, out = invoke('sync')
+    check('whitespace-only title edits are ignored', rc == 0 and 'NOTICE' not in out and sh(['git', 'rev-parse', 'HEAD'], cwd=alpha)[1] == head, out)
+    saved = mirror.read_text()
+    view.write_text(view.read_text().replace('Gamma three', 'Gamma renamed'))
+    mirror.write_text(saved.replace('- [ ] Gamma three', '- [x] Gamma three'))
+    rc, out = invoke('sync')
+    check('a view rename and a toggle in the copied note combine into one change', rc == 0 and '- [x] Gamma renamed' in note.read_text(), out)
+    # A copied-note toggle for a task renamed on the Mac cannot be restored away, so it freezes with a clear error.
+    note.write_text(note.read_text().replace('Alpha renamed', 'Alpha mac'))
+    local('docs_stamp.py', 'docs/checklist.md', '--by', 'human', '--summary', 'Rename again on Mac', cwd=alpha)
+    commit(alpha, 'Rename again on Mac')
+    saved = mirror.read_text()
+    mirror.write_text(saved.replace('- [ ] Alpha renamed', '- [x] Alpha renamed'))
+    rc, out = invoke('sync')
+    check('a pending copied-note toggle for a Mac-renamed task freezes with the project named', rc == 1 and 'alpha: task changed or disappeared on Mac' in out, out)
+    mirror.write_text(saved)
+    rc, out = invoke('sync')
+    check('restoring the copied note recovers from the freeze', rc == 0, out)
+    old_stash = home / 'rejected/19700101T000000Z'
+    old_stash.mkdir(parents=True)
+    (old_stash / 'old-edit').write_text('very old phone text')
+    os.utime(old_stash, (1, 1))
+    invoke('sync')
+    check('saved phone text is forgotten after 30 days', not old_stash.exists())
+    # Adapter-backed renames.
+    beta_view = vault / '_Folderwise Tasks/beta.md'
+    beta_view.write_text(beta_view.read_text().replace('CSV one', 'CSV renamed'))
+    rc, out = invoke('sync')
+    _, log = sh(['git', 'log', '-1', '--format=%B'], cwd=source / 'beta')
+    check('adapter task rename updates the CSV and regenerated note', rc == 0 and 'row-1,CSV renamed,false' in (source / 'beta/data/tasks.csv').read_text()
+          and 'CSV renamed' in (source / 'beta/docs/checklist.md').read_text() and 'Bridge-Ops: toggle=0 rename=1' in log, out)
+    beta_view.write_text(beta_view.read_text().replace('CSV renamed', 'CSV phone'))
+    csv_file = source / 'beta/data/tasks.csv'
+    csv_file.write_text(csv_file.read_text().replace('CSV renamed', 'CSV mac'))
+    commit(source / 'beta', 'Rename CSV row on Mac')
+    rc, out = invoke('sync')
+    check('an adapter rename pending during a Mac rename is a reported conflict', rc == 0 and 'its title also changed on the Mac' in out
+          and 'CSV mac' in beta_view.read_text(), out)
+    gamma_view = vault / '_Folderwise Tasks/gamma.md'
+    gamma_view.write_text(gamma_view.read_text().replace('CSV one', 'CSV nope'))
+    rc, out = invoke('sync')
+    check('an adapter that does not allow title edits is restored', rc == 0 and 'does not allow title edits' in out and 'CSV nope' not in gamma_view.read_text()
+          and 'CSV one' in (source / 'gamma/data/tasks.csv').read_text(), out)
+    delta_view = vault / '_Folderwise Tasks/delta.md'
+    delta_head = sh(['git', 'rev-parse', 'HEAD'], cwd=source / 'delta')[1]
+    saved = delta_view.read_text()
+    delta_view.write_text(saved.replace('CSV one', 'CSV ignored'))
+    rc, out = invoke('sync')
+    check('an adapter that ignores the title aborts without a commit', rc == 1 and 'did not apply the requested title' in out
+          and sh(['git', 'rev-parse', 'HEAD'], cwd=source / 'delta')[1] == delta_head and 'row-1,CSV one,false' in (source / 'delta/data/tasks.csv').read_text(), out)
+    delta_view.write_text(saved)
+    rc, out = invoke('sync')
+    check('restoring the view recovers from an adapter failure', rc == 0, out)
+    # CRLF sources keep their line endings through a toggle.
+    rc, out = local('docs_new.py', 'docs/windows.md', '--type', 'plan', '--title', 'Windows', '--by', 'human', cwd=alpha)
+    windows = alpha / 'docs/windows.md'
+    windows.write_bytes(windows.read_text().replace('## Change Log', '- [ ] Windows task\n\n## Change Log').replace('\n', '\r\n').encode())
+    commit(alpha, 'Add CRLF note')
+    invoke('sync')
+    view.write_text(view.read_text().replace('- [ ] Windows task', '- [x] Windows task'))
+    rc, out = invoke('sync')
+    raw = windows.read_bytes()
+    check('a toggle keeps CRLF line endings in the source note', rc == 0 and b'- [x] Windows task\r\n' in raw and b'\n' not in raw.replace(b'\r\n', b''), out)
+    # iCloud conflict copies are reported, never imported.
+    copy = vault / 'alpha/docs/checklist 2.md'
+    copy.write_text('- [x] Alpha renamed\n')
+    rc, out = invoke('sync')
+    status = (vault / '_folderwise-sync-status.md').read_text()
+    check('conflict copies are reported and not imported', rc == 0 and '## iCloud conflict copies' in status and 'alpha/docs/checklist 2.md' in status
+          and copy.read_text() == '- [x] Alpha renamed\n', status)
+    copy.unlink()
+    invoke('sync')
+    check('the conflict-copy section disappears once the copy is gone', '## iCloud conflict copies' not in (vault / '_folderwise-sync-status.md').read_text())
+    script = source / 'gamma/scripts/adapter.py'
+    script.write_text(script.read_text().replace("path='docs/checklist.md')", "path='docs/checklist.md',editable='title')"))
+    commit(source / 'gamma', 'Break the editable field')
+    rc, out = invoke('sync')
+    check('an adapter editable field must be a list', rc == 1 and 'editable must be a list' in out, out)
 
 
 def s_ibridge_setup():
@@ -1539,7 +1760,7 @@ SECTIONS = [
     ("create", s_create), ("new_doc", s_new_doc_and_index), ("stamp", s_stamp_and_hook), ("hook", s_hook_fail_closed),
     ("lint", s_lint_rules), ("timezone", s_timezone), ("links", s_links), ("toc", s_toc), ("mv", s_mv),
     ("tables", s_tables), ("stale", s_stale_index_recent), ("sync", s_sync),
-    ("ibridge", s_ibridge), ("ibridge_setup", s_ibridge_setup), ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache),
+    ("ibridge", s_ibridge), ("ibridge_rename", s_ibridge_rename), ("ibridge_setup", s_ibridge_setup), ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache),
     ("framework_checkout", s_framework_checkout), ("framework_index", s_framework_index), ("ci_allowlist", s_ci_allowlist),
 ]
 
