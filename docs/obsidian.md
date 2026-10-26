@@ -48,7 +48,34 @@ Configuration, ownership records, baselines, temporary clones, export journal an
 
 In Obsidian on Mac and iPhone, install and enable the community **Tasks** plugin (`obsidian-tasks-plugin`). Open the exported root `Tasks.md` in reading mode. It includes open and completed tasks across all enabled projects, grouped by project. Every result links to its source document. Undated and nested tasks are included; no tag is required. Tasks inside fenced code examples, front matter and generated blocks are excluded from generic Markdown scanning.
 
-The bridge creates `_Folderwise Tasks/<project>.md` as a task projection. This preserves completed CSV-backed tasks for reopening even if their ordinary generated backlog hides them. The dashboard queries only this folder, avoiding duplicate results from copied source notes. [Tasks queries can update their source checkboxes](https://publish.obsidian.md/tasks/Introduction); the Mac then imports the resulting file change.
+### Generated task folder and naming
+
+`TASK_DIR` is the tool’s internal constant for **`_Folderwise Tasks`**, a bridge-managed folder at the root of the **iCloud vault**. It is not a folder in your authoritative Mac project repositories. The bridge builds one task-view file per enabled project, combining its supported handwritten Markdown checkboxes and tasks supplied by its configured CSV adapter.
+
+The naming convention is **`_Folderwise Tasks/<project-folder-name>.md`**: the filename exactly matches the project directory name, followed by `.md`. For example:
+
+```text
+Folderwise/                         # iCloud Obsidian vault
+├── Tasks.md                        # central dashboard: open and completed queries
+├── _folderwise-sync-status.md      # generated sync issues and storage report
+├── _Folderwise Tasks/
+│   ├── finances.md                 # task view for the finances project
+│   └── home-lab.md                 # task view for the home-lab project
+├── finances/                       # selected copies of project documents
+└── home-lab/
+```
+
+These names are fixed by the bridge, not user-configurable settings. Each generated file has a project heading and ordinary `- [ ]` / `- [x]` task lines with links to the copied source documents. Completed tasks remain available for reopening, including completed rows returned by an adapter even if the project’s normal backlog hides them. `Tasks.md` queries only `_Folderwise Tasks`, avoiding duplicate results from copied source notes. [Tasks queries can update their source checkboxes](https://publish.obsidian.md/tasks/Introduction).
+
+On each scheduled or manual `sync`, the bridge:
+
+1. Compares checkbox changes in the previous generated views with its local task mappings.
+2. Applies those boolean changes to authoritative Mac Markdown or adapter-managed records, regenerates affected source views, validates, and commits local changes.
+3. Rebuilds the project task views and dashboard from the current Mac sources. It writes files only when content changes. New projects join when enabled; disabling a project removes its unchanged generated task-view file after pending phone changes are resolved.
+
+To refresh immediately, run `uv run _tools/icloud_bridge.py sync` on the Mac. The scheduled job performs the same operation at your configured interval.
+
+**Toggle checkboxes; do not edit titles, add tasks, reorder lines, or rename these files or their folder.** Only checkbox on/off changes are imported. Unsupported edits and conflicts are preserved and reported in `_folderwise-sync-status.md`; the bridge does not overwrite them with a regenerated view. Missing generated files are restored from Mac data on the next sync. Task identity and ownership mappings live in the bridge’s local state outside iCloud; the generated Markdown is an interactive view, not the authoritative task store.
 
 Configure Tasks for simple toggles: disable automatic done/created/cancelled dates, leave its global filter empty, use ordinary space/x statuses, and avoid recurring tasks or on-completion deletion. Those features modify more than a checkbox and are outside this bridge's contract. A plugin-added date is preserved and reported as an unsupported edit, rather than silently discarded. Dataview is optional for property tables; [Dataview TASK](https://blacksmithgu.github.io/obsidian-dataview/queries/query-types/#task) can also toggle a checkbox, provided completion metadata insertion is disabled.
 
@@ -137,7 +164,11 @@ uv run _tools/icloud_bridge.py configure --mode full
 
 Limits apply to individual images and all selected images across enabled projects. `null` means unlimited; `0` means zero bytes. Markdown/tasks are never omitted to satisfy an image limit. Selection is deterministic in project/path order: reject oversized files, include images that fit, skip one that does not fit and continue to smaller later images. Repeated references to the same path count once. Original image bytes and document references are preserved.
 
-`Bridge Status.md` lists omitted files, sizes and reasons, including configured-limit omissions and missing/untracked referenced images. It reports selected export bytes, selected image bytes, and currently present managed payload bytes, **not** account free space or an iCloud bill. Current payload size excludes generated status/settings and unowned files, and can exceed the new selection when a conflict prevents cleanup. Obsidian plugins, unrelated vault files, iCloud retention and other account data can consume additional storage. Lowering limits removes only unchanged bridge-owned copies; modified phone files are preserved and reported. The report only changes when its meaningful content changes.
+### Bridge status report
+
+The generated `_folderwise-sync-status.md` lives at the root of your iCloud vault. It lists sync issues and gives you details to investigate a notification. On upgrade, the bridge replaces an unchanged, bridge-owned `Bridge Status.md` with this name. An already-renamed, unchanged report is recognized too. Edited or unowned legacy reports are preserved and flagged in the new report; review and move them outside the vault to clear the warning. An existing edited destination is never overwritten.
+
+`_folderwise-sync-status.md` lists omitted files, sizes and reasons, including configured-limit omissions and missing/untracked referenced images. It reports selected export bytes, selected image bytes, and currently present managed payload bytes, **not** account free space or an iCloud bill. Current payload size excludes generated status/settings and unowned files, and can exceed the new selection when a conflict prevents cleanup. Obsidian plugins, unrelated vault files, iCloud retention and other account data can consume additional storage. Lowering limits removes only unchanged bridge-owned copies; modified phone files are preserved and reported. The report only changes when its meaningful content changes.
 
 ## Schedule, notifications, and controls
 
@@ -150,6 +181,36 @@ uv run _tools/icloud_bridge.py doctor
 uv run _tools/icloud_bridge.py logs
 ```
 
+The job launches through a private executable named **`folderwise-ibridgesync`**, so macOS Login Items identifies Folderwise rather than the shared `uv` runtime. The job label remains `org.folderwise.ibridge`. `uv` is still a dependency; its installed binary is not renamed or modified. macOS still shows its normal background-item notification and provides the normal on/off control. File-access prompts may name the runtime that actually reads the files. See [Apple's attribution rules](https://developer.apple.com/documentation/servicemanagement/updating-helper-executables-from-earlier-versions-of-macos).
+
+### Expected macOS background-activity notice
+
+When you enable scheduled syncing, macOS may display an **App Background Activity** notice saying that **folderwise-ibridgesync** can run in the background. This is the expected system notice for the sync job you just enabled.
+
+![Expected macOS App Background Activity notice for folderwise-ibridgesync](assets/obsidian-background-activity-notice.png)
+
+You can manage the helper under **System Settings → General → Login Items & Extensions**, in **Background App Activity**. Keep its switch enabled for scheduled syncing. Because each sync runs briefly, **Not running in background** between runs is normal; use `status` or `doctor` to check the last successful sync.
+
+![The enabled folderwise-ibridgesync helper in macOS Login Items](assets/obsidian-login-items.png)
+
+Folderwise also sends its own setup-success notification with the configured interval, described below. That confirmation is separate from the macOS background-activity notice.
+
+For an inspectable preparation step without registering or enabling a job:
+
+```sh
+uv run _tools/icloud_bridge.py schedule-prepare
+```
+
+This writes the owned entry point under the local state directory's `bin/` and a `launchagent-preview.plist` beside the config. It works on Mac and Linux for review/testing; actual job registration still requires macOS. Preparation refuses to replace a customized entry point. `schedule-enable` prepares it automatically and upgrades existing jobs that launched `uv` directly. Uninstall removes an unchanged generated entry point and preserves one that has been customized.
+
+**Mac alerts when sync needs attention.** The bridge confirms setup and sends a summary when a run detects new conflicts, failed imports, or image-budget omissions. Open the vault’s `_folderwise-sync-status.md` for details; routine successful runs stay quiet.
+
+![Folderwise iBridge setup notification on macOS confirming a five-minute schedule](assets/ibridge-macos-notification.png)
+
+*Actual setup confirmation from the fictional test bridge. Sync issue alerts use the same Folderwise name and logo.*
+
+Alerts require a running bridge. Use `doctor` to check for missing or stale scheduled runs; a stopped job or an offline Mac cannot send an alert.
+
 The default interval is five minutes. `schedule-enable` runs a foreground sync first, registers the job, then announces: **folderwise-ibridge is now enabled. Sync job is running and scheduled every X minutes.** The first setup notification also lets you check visibility. Change the interval and reload the schedule with:
 
 ```sh
@@ -159,9 +220,9 @@ uv run _tools/icloud_bridge.py notify-test
 uv run _tools/icloud_bridge.py schedule-disable
 ```
 
-The user must remain logged in. Sleep can skip interval firings; periodic runs resume after wake. The job does not overlap itself. Only one scheduled bridge installation per macOS user is supported. Re-running `schedule-enable` reloads the owned job; it refuses to replace another configuration's job. Disabling preserves vault content and local state.
+The user must remain logged in. Background helpers may need one-time macOS file-access consent for protected folders such as Documents. For fictional testing, a source/state folder under your home directory avoids needing broad Documents-folder access; keep the separate mobile vault in iCloud. Sleep can skip interval firings; periodic runs resume after wake. The job does not overlap itself. Only one scheduled bridge installation per macOS user is supported. Re-running `schedule-enable` reloads the owned job; it refuses to replace another configuration's job. Disabling preserves vault content and local state.
 
-Notifications use macOS's built-in script host and are best effort. New conflicts, failed imports and image-budget omissions produce a summary; routine success and unchanged issues stay quiet. Intentional lean exclusions do not generate alerts. Banners contain no document/task content. Focus or notification permissions can suppress them; a successful script invocation does not prove a banner appeared. See [Apple's notification scripting guide](https://developer.apple.com/library/archive/documentation/LanguagesUtilities/Conceptual/MacAutomationScriptingGuide/DisplayNotifications.html). Branded notifications and custom action buttons are outside this release.
+Folderwise builds a small notification app locally using macOS’s built-in `osacompile` and `codesign` tools. Setup confirmations, error summaries, and `notify-test` use the same Folderwise name and logo. The icon crops transparent padding from our original artwork and includes sizes for standard and Retina displays. No additional package or developer account is required. The generated app lives beside the bridge configuration, outside iCloud; uninstall removes it when unchanged and preserves customizations. Notifications are best effort. New conflicts, failed imports and image-budget omissions produce a summary; routine success and unchanged issues stay quiet. Intentional lean exclusions do not generate alerts. Banners contain no document/task content. Focus or notification permissions can suppress them; a successful app launch does not prove a banner appeared. See [Apple's notification scripting guide](https://developer.apple.com/library/archive/documentation/LanguagesUtilities/Conceptual/MacAutomationScriptingGuide/DisplayNotifications.html). macOS controls the icon on its own App Background Activity notice (the System Settings gear); Folderwise cannot replace it. Custom action buttons are outside this release. Allow notifications for **Folderwise iBridge** if macOS asks on first use.
 
 ```sh
 uv run _tools/icloud_bridge.py configure --notifications off
@@ -170,9 +231,25 @@ uv run _tools/icloud_bridge.py configure --notifications errors
 
 The default is `errors`; `off` also suppresses the enable announcement. `notify-test` is an explicit request to display a test regardless of that preference. Local `bridge.log` rotates at about 1 MB; launchd's stdout/stderr logs are separate files in the configuration directory. `doctor` reports pending failures, stale scheduled runs and interval mismatches. Use `launchctl print gui/$(id -u)/org.folderwise.ibridge` for OS diagnostics; the bridge does not parse its unstable output format.
 
+### A notification appears only in Notification Center
+
+A successful app launch or a macOS log entry saying “presenting as banner” is not proof that a banner was visible on the desktop. The bridge reports **Notification requested**, rather than claiming a banner appeared. macOS remains responsible for presentation.
+
+Check **System Settings → Notifications → Folderwise iBridge**: enable **Allow notifications** and **Desktop**, and choose Temporary or Persistent to suit your preference. Check the active Focus and its app exceptions. **Summarize notifications** changes preview text; it is separate from the Reduce Interruptions Focus that can silence alerts.
+
+If you use Screen Sharing, remote desktop, screen recording, or display mirroring, also check **System Settings → Notifications → when mirroring or sharing the display**. With **Notifications Off**, macOS may keep notifications in Notification Center without showing them at the top-right corner. If a computer-use or screen-reading assistant is active, end its capture session before testing; that capture can count as display sharing even when you are not presenting to another person. End the sharing session to test ordinary desktop delivery, or consciously choose **Allow Notifications** if that suits your setup. This is a global privacy preference: allowing it can show other apps’ private messages to people viewing your display. Folderwise never changes it automatically. See [Apple’s notification settings guide](https://support.apple.com/en-ie/guide/mac-help/mh40583/27/mac/27).
+
+Repeat the setup-success notification with one command, without reinstalling or restarting the scheduled job:
+
+```sh
+uv run _tools/icloud_bridge.py notify-test --setup-message
+```
+
+Use the same `--config /absolute/path/config.json` argument as your installed bridge when its configuration is outside the default location. This command replays the setup wording using the configured interval; it does not change schedule state. Plain `notify-test` sends a generic test instead. Both explicitly request a notification even when bridge notifications are configured off, and print the macOS visibility checks. A test cannot override denied notification access, Focus, or shared-display privacy controls.
+
 ## Conflicts and recovery
 
-Phone imports are evaluated against the last accepted baseline, not modification timestamps. Unsupported or conflicting edits freeze export so they cannot be overwritten. Read `Bridge Status.md` and local logs; preserve the edited vault file outside managed paths, resolve the corresponding source on Mac, then restore the exported file to its previous baseline or apply only the intended checkbox change. Do not erase bridge state to make a conflict disappear.
+Phone imports are evaluated against the last accepted baseline, not modification timestamps. Unsupported or conflicting edits freeze export so they cannot be overwritten. Read `_folderwise-sync-status.md` and local logs; preserve the edited vault file outside managed paths, resolve the corresponding source on Mac, then restore the exported file to its previous baseline or apply only the intended checkbox change. Do not erase bridge state to make a conflict disappear.
 
 Export uses a local journal (`export.json`) so interrupted copies can finish on a later run. Replay proceeds only when each destination still matches the old or intended bytes and each source payload remains unchanged. If either side changed, it stops and preserves the files. Keep independent backups of your source repositories.
 

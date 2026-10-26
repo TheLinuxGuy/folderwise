@@ -6,7 +6,7 @@
 """Folderwise iCloud bridge: Mac-owned export and boolean task import.
 
 Commands: setup, configure, plan, sync, status, enable, disable, schedule-enable,
-schedule-disable, doctor, logs, notify-test, vault-init, uninstall. See docs/obsidian.md before setup.
+schedule-disable, schedule-prepare, doctor, logs, notify-test, vault-init, uninstall. See docs/obsidian.md before setup.
 """
 from __future__ import annotations
 
@@ -34,7 +34,10 @@ import docslib as dl  # noqa: E402
 
 TOOLS = Path(__file__).resolve().parent
 LABEL = "org.folderwise.ibridge"
-REPORT, DASHBOARD, TASK_DIR = "Bridge Status.md", "Tasks.md", "_Folderwise Tasks"
+LAUNCHER_NAME = "folderwise-ibridgesync"
+LAUNCHER_BODY = b'#!/bin/sh\n# Folderwise iCloud bridge launch entry point.\nexec "$@"\n'
+LEGACY_REPORT = "Bridge Status.md"
+REPORT, DASHBOARD, TASK_DIR = "_folderwise-sync-status.md", "Tasks.md", "_Folderwise Tasks"
 IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif", ".heic", ".bmp"}
 SKIP = {"AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", "_doc-template.md", "node_modules", "__pycache__", "#recycle", "credentials.json", "id_rsa", "id_ed25519"}
 CHECKBOX = re.compile(r"^(\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\].*)$")
@@ -427,18 +430,96 @@ def import_project(settings, project, wanted, baseline, current, home):
             shutil.rmtree(clone)
 
 
-def notify(message):
-    script = 'on run argv\ndisplay notification (item 1 of argv) with title "Folderwise iBridge"\nend run'
+NOTIFIER_NAME = 'Folderwise iBridge.app'
+NOTIFIER_INFO = {'CFBundleIdentifier': 'org.folderwise.ibridge.notifications',
+                 'CFBundleDisplayName': 'Folderwise iBridge', 'CFBundleName': 'Folderwise iBridge',
+                 'CFBundleIconFile': 'Folderwise.icns', 'CFBundleVersion': '2', 'LSUIElement': True}
+NOTIFIER_SCRIPT = '''on run
+try
+    set messagePath to (POSIX path of (path to me)) & "../notification-message.txt"
+    set notificationText to read POSIX file messagePath as «class utf8»
+    display notification notificationText with title "Folderwise iBridge"
+end try
+end run
+'''
+
+
+def notifier_files(app):
+    """Fingerprint the generated bundle so updates/uninstall preserve user edits."""
+    files = {}
+    for item in sorted(app.rglob('*')):
+        if item.is_symlink():
+            raise ValueError('notification app contains a symlink')
+        if item.is_file():
+            files[item.relative_to(app).as_posix()] = digest(item.read_bytes())
+    return files
+
+
+def prepare_notifier(home):
+    """Compile Apple's script app locally; no download, launch or banner."""
+    app = safe(home, NOTIFIER_NAME)
+    manifest = safe(home, 'notifier.json')
+    previous = read_json(manifest, {})
+    icon = TOOLS / 'ibridge_assets/folderwise.icns'
+    version = digest(NOTIFIER_SCRIPT.encode() + icon.read_bytes() + plistlib.dumps(NOTIFIER_INFO))
+    if app.exists():
+        if not previous.get('files') or notifier_files(app) != previous['files']:
+            raise ValueError('notification app has custom content; preserve it before rebuilding')
+        if previous.get('version') == version:
+            return app
+    with tempfile.TemporaryDirectory(dir=home, prefix='.notifier-') as temp:
+        script = Path(temp) / 'notify.applescript'
+        script.write_text(NOTIFIER_SCRIPT)
+        built = Path(temp) / NOTIFIER_NAME
+        run(['osacompile', '-o', built, script])
+        info = built / 'Contents/Info.plist'
+        metadata = plistlib.loads(info.read_bytes())
+        metadata.pop('CFBundleIconName', None)
+        metadata.update(NOTIFIER_INFO)
+        # osacompile ships an asset catalog that otherwise overrides IconFile.
+        (built / 'Contents/Resources/Assets.car').unlink(missing_ok=True)
+        atomic(info, plistlib.dumps(metadata))
+        shutil.copyfile(icon, built / 'Contents/Resources/Folderwise.icns')
+        shutil.copyfile(icon, built / 'Contents/Resources/applet.icns')
+        run(['codesign', '--force', '--sign', '-', built])
+        files = notifier_files(built)
+        if app.exists():
+            shutil.rmtree(app)
+        built.replace(app)
+        save(manifest, {'version': version, 'files': files})
+    return app
+
+
+def notify(message, home):
     try:
-        run(["osascript", "-e", script, message])
+        app = prepare_notifier(home)
+        # Script apps do not receive open's command-line arguments. Hand off
+        # UTF-8 data outside the signed bundle; never compile message text.
+        message_file = safe(home, 'notification-message.txt')
+        atomic(message_file, message.encode('utf-8'))
+        try:
+            run(['open', '-W', '-n', '-g', app])
+        finally:
+            message_file.unlink(missing_ok=True)
         return True
     except (ValueError, OSError):
         return False
 
 
+def remove_notifier(home):
+    app = safe(home, NOTIFIER_NAME)
+    manifest = safe(home, 'notifier.json')
+    if app.exists():
+        if notifier_files(app) != read_json(manifest, {}).get('files'):
+            print('Preserved customized notification app: ' + str(app))
+            return
+        shutil.rmtree(app)
+    manifest.unlink(missing_ok=True)
+
+
 def report(files, omissions, issues, settings, managed_bytes):
     image_bytes = sum(content_size(data) for key, data in files.items() if Path(key).suffix.lower() in IMAGES)
-    rows = ["# Bridge Status", "", f"Mode: **{settings['mode']}**. Interval: **{settings['interval_minutes']} minutes**.",
+    rows = ["# Folderwise sync status", "", f"Mode: **{settings['mode']}**. Interval: **{settings['interval_minutes']} minutes**.",
             f"Estimated managed export: **{sum(content_size(data) for data in files.values()):,} bytes**, including **{image_bytes:,} image bytes**.",
             f"Currently present managed payload: **{managed_bytes:,} bytes** (excludes status/settings and unowned files).",
             "This is a file-size estimate, not your iCloud account usage or bill.",
@@ -587,21 +668,31 @@ def sync(settings, home, dry=False):
                 managed_bytes += p.stat().st_size
         except ValueError:
             pass  # already reported above; never follow a conflicting symlink to count it
+    previous_report = read_json(home / 'report.json', {})
+    legacy = safe(vault, LEGACY_REPORT)
+    legacy_before = existing_hash(legacy)
+    legacy_owned = (legacy_before is not None and previous_report.get('path', LEGACY_REPORT) == LEGACY_REPORT
+                    and legacy_before == previous_report.get('hash'))
+    if legacy_before is not None and not legacy_owned:
+        issues.append(f'{LEGACY_REPORT}: legacy report has unowned edits; preserved. Move it outside the vault after review.')
     status = report(files, omissions, issues, settings, managed_bytes)
     target = safe(vault, REPORT)
-    previous_report = read_json(home / 'report.json', {})
     if target.exists() and content_hash(target) not in {previous_report.get('hash'), digest(status)}:
-        raise ValueError('Bridge Status.md has unowned edits; preserve/rename it before retrying')
+        raise ValueError(f'{REPORT} has unowned edits; preserve/rename it before retrying')
     if not target.exists() or target.read_bytes() != status:
         atomic(target, status)
-    save(home / 'report.json', {'hash': digest(status)})
+    if legacy_owned:
+        if existing_hash(legacy) != legacy_before:
+            raise ValueError(f'{LEGACY_REPORT}: changed during migration; preserved')
+        legacy.unlink()
+    save(home / 'report.json', {'path': REPORT, 'hash': digest(status)})
     last = {'issues': issues, 'omitted_files': len(omissions), 'selected_bytes': total, 'managed_bytes': managed_bytes,
             'last_run': dl.now({'timezone': 'UTC'}).isoformat(), 'last_run_epoch': time.time(), 'ok': not issues}
     previous = read_json(home / 'last-run.json', {})
     actionable = [item for item in omissions if item['reason'] != 'excluded by lean mode']
     signature = digest(json.dumps([issues, actionable], sort_keys=True).encode())
     if settings['notifications'] == 'errors' and (issues or actionable) and previous.get('issue_signature') != signature:
-        last['notification_sent'] = notify('Folderwise bridge needs attention. See Bridge Status.md in your vault.')
+        last['notification_sent'] = notify('Folderwise bridge needs attention. See _folderwise-sync-status.md in your vault.', home)
     last['issue_signature'] = signature
     save(home / 'last-run.json', last)
     with (home / 'bridge.log').open('a') as log:
@@ -611,6 +702,47 @@ def sync(settings, home, dry=False):
     for issue in issues:
         print('ERROR ' + issue)
     return 1 if issues else 0
+
+def prepare_schedule(settings, config_path):
+    """Prepare an owned named entry point and plist preview, without OS registration."""
+    launcher = safe(config_path.parent, 'bin/' + LAUNCHER_NAME)
+    if launcher.exists() and launcher.read_bytes() != LAUNCHER_BODY:
+        raise ValueError('launch entry point has custom content; preserve or restore it before scheduling')
+    if not launcher.exists():
+        atomic(launcher, LAUNCHER_BODY)
+    launcher.chmod(0o700)
+    uv = shutil.which("uv")
+    if not uv:
+        raise ValueError("uv not found")
+    plist = {"Label": LABEL, "ProgramArguments": [str(launcher), uv, "run", "--quiet", str(TOOLS / "icloud_bridge.py"), "--config", str(config_path), "sync"],
+             "StartInterval": settings["interval_minutes"] * 60, "RunAtLoad": True, "WorkingDirectory": str(TOOLS.parent),
+             "EnvironmentVariables": {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "UV_CACHE_DIR": str(config_path.parent / "uv-cache")},
+             "StandardOutPath": str(config_path.parent / "launchd.log"), "StandardErrorPath": str(config_path.parent / "launchd-error.log")}
+    preview = config_path.parent / 'launchagent-preview.plist'
+    atomic(preview, plistlib.dumps(plist))
+    return plist
+
+
+def remove_launcher(home):
+    launcher = safe(home, 'bin/' + LAUNCHER_NAME)
+    if launcher.exists():
+        if launcher.read_bytes() == LAUNCHER_BODY:
+            launcher.unlink()
+        else:
+            print('Preserved customized launch entry point: ' + str(launcher))
+
+
+NOTIFICATION_VISIBILITY = (
+    'Notification requested; macOS controls whether a banner is visible. '
+    'If it only appears in Notification Center, check System Settings > Notifications > Folderwise iBridge '
+    '(Allow notifications and Desktop), Focus, and Notifications > when mirroring or sharing the display. '
+    'The bridge does not change these settings; allowing shared-display notifications can expose other apps’ messages.'
+)
+
+
+def setup_notification(settings):
+    return f"folderwise-ibridge is now enabled. Sync job is running and scheduled every {settings['interval_minutes']} minutes."
+
 
 def schedule(settings, config_path, enable):
     if sys.platform != "darwin":
@@ -630,21 +762,18 @@ def schedule(settings, config_path, enable):
         save(config_path.parent / "schedule.json", {"enabled": False})
         print("Scheduled bridge disabled; vault and local state preserved.")
         return
-    uv = shutil.which("uv")
-    if not uv:
-        raise ValueError("uv not found")
-    plist = {"Label": LABEL, "ProgramArguments": [uv, "run", "--quiet", str(TOOLS / "icloud_bridge.py"), "--config", str(config_path), "sync"],
-             "StartInterval": settings["interval_minutes"] * 60, "RunAtLoad": True, "WorkingDirectory": str(TOOLS.parent),
-             "EnvironmentVariables": {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "UV_CACHE_DIR": str(config_path.parent / "uv-cache")},
-             "StandardOutPath": str(config_path.parent / "launchd.log"), "StandardErrorPath": str(config_path.parent / "launchd-error.log")}
+    plist = prepare_schedule(settings, config_path)
     atomic(path, plistlib.dumps(plist))
     run(["launchctl", "enable", domain + "/" + LABEL])
     subprocess.run(["launchctl", "bootout", domain + "/" + LABEL], capture_output=True)
     run(["launchctl", "bootstrap", domain, path])
-    message = f"folderwise-ibridge is now enabled. Sync job is running and scheduled every {settings['interval_minutes']} minutes."
+    message = setup_notification(settings)
     save(config_path.parent / "schedule.json", {"enabled": True, "interval_minutes": settings["interval_minutes"]})
-    if settings["notifications"] != "off" and not notify(message):
-        print("Notification could not be sent; check macOS notification settings. Scheduling succeeded.")
+    if settings["notifications"] != "off":
+        if not notify(message, config_path.parent):
+            print("Notification could not be requested. Scheduling succeeded; use notify-test to retry.")
+        else:
+            print(NOTIFICATION_VISIBILITY)
     print(message)
 
 
@@ -764,6 +893,8 @@ def uninstall_bridge(settings, path):
         schedule(settings, path, False)
     settings['enabled'] = False
     save(path, settings)
+    remove_launcher(home)
+    remove_notifier(home)
     marker = safe(Path(settings['source']), '.folderwise-obsidian.json')
     profile = read_json(marker, {})
     if profile.get('bridge_config') == str(path):
@@ -802,6 +933,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", type=Path, default=DEFAULT_HOME / "config.json")
     ap.add_argument("--dry-run", action="store_true", help="preview setup without changing vaults, projects or defaults")
+    ap.add_argument("--setup-message", action="store_true", help="notify-test: replay the setup-success text with the configured interval")
     ap.add_argument("--no-schedule", action="store_true", help="initialize and sync without registering a macOS job")
     ap.add_argument("--source", type=Path)
     ap.add_argument("--vault", type=Path)
@@ -811,9 +943,11 @@ def main():
     ap.add_argument("--max-images-total-bytes", type=int)
     ap.add_argument("--unlimited-images", action="store_true")
     ap.add_argument("--notifications", choices=["off", "errors"])
-    ap.add_argument("command", choices=["setup", "configure", "plan", "sync", "status", "enable", "disable", "schedule-enable", "schedule-disable", "doctor", "logs", "notify-test", "vault-init", "uninstall"])
+    ap.add_argument("command", choices=["setup", "configure", "plan", "sync", "status", "enable", "disable", "schedule-enable", "schedule-disable", "doctor", "logs", "notify-test", "vault-init", "uninstall", "schedule-prepare"])
     ap.add_argument("project", nargs="?")
     args = ap.parse_args()
+    if args.setup_message and args.command != "notify-test":
+        ap.error("--setup-message requires notify-test")
     path = args.config.expanduser().absolute()
     try:
         with locked(path.parent):
@@ -870,12 +1004,19 @@ def main():
                 return 0
             if args.command in {"sync", "plan"}:
                 return sync(settings, path.parent, args.command == "plan")
+            if args.command == 'schedule-prepare':
+                prepare_schedule(settings, path)
+                print('Prepared named launcher and preview at ' + str(path.parent / 'launchagent-preview.plist'))
+                return 0
             if args.command.startswith("schedule-") or args.command == "setup":
                 if args.command == "schedule-enable" and sync(settings, path.parent):
                     raise ValueError("resolve sync errors before scheduling")
             elif args.command == "notify-test":
-                if not notify("Folderwise iBridge notifications work."):
-                    raise ValueError("notification delivery failed (macOS/osascript required)")
+                message = setup_notification(settings) if args.setup_message else "Folderwise iBridge notifications work."
+                if not notify(message, path.parent):
+                    raise ValueError("notification request failed (macOS notification app required)")
+                print(message)
+                print(NOTIFICATION_VISIBILITY)
             elif args.command == "doctor":
                 files, _, omissions = inventory(settings)
                 for key in files:

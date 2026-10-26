@@ -16,6 +16,7 @@ Exit code 0 = all passed, 1 = something failed.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -985,6 +986,46 @@ def s_ibridge():
     check('bridge exports dashboard and completed tasks', rc == 0 and '## Completed tasks' in (vault / 'Tasks.md').read_text()
           and '- [x] Completed task' in view.read_text() and 'Example only' not in view.read_text(), out)
     check('bridge excludes Git and instructions', not (vault / 'alpha/.git').exists() and not (vault / 'alpha/AGENTS.md').exists())
+    report_path=vault/'_folderwise-sync-status.md'
+    legacy=vault/'Bridge Status.md'
+    legacy_data=report_path.read_bytes().replace(b'# Folderwise sync status',b'# Bridge Status',1)
+    report_path.unlink();legacy.write_bytes(legacy_data)
+    legacy_manifest={'hash':hashlib.sha256(legacy_data).hexdigest()}
+    (home/'report.json').write_text(json.dumps(legacy_manifest))
+    rc,out=invoke('plan')
+    check('status migration dry run preserves the legacy report and ownership',rc==0 and legacy.exists() and not report_path.exists()
+          and json.loads((home/'report.json').read_text())==legacy_manifest,out)
+    report_path.write_text('User-owned destination\n')
+    rc,out=invoke('sync')
+    check('status migration refuses an unowned destination without removing the old report',rc==1 and legacy.read_bytes()==legacy_data
+          and report_path.read_text()=='User-owned destination\n',out)
+    report_path.write_bytes(legacy_data)
+    rc,out=invoke('sync')
+    check('status migration recognizes an unchanged copy at the new name',rc==0 and report_path.exists() and not legacy.exists()
+          and json.loads((home/'report.json').read_text())['path']=='_folderwise-sync-status.md',out)
+    stamp=report_path.stat().st_mtime_ns
+    rc,out=invoke('sync')
+    check('migrated status report is idempotent',rc==0 and report_path.stat().st_mtime_ns==stamp,out)
+    report_path.unlink();legacy.write_bytes(legacy_data)
+    (home/'report.json').write_text(json.dumps(legacy_manifest))
+    rc,out=invoke('sync')
+    check('status report migrates when no destination exists',rc==0 and report_path.exists() and not legacy.exists(),out)
+    report_path.write_bytes(legacy_data)
+    (home/'report.json').write_text(json.dumps(legacy_manifest))
+    rc,out=invoke('sync')
+    check('status migration recognizes an unchanged manually renamed report',rc==0
+          and json.loads((home/'report.json').read_text())['path']=='_folderwise-sync-status.md',out)
+    report_path.unlink();legacy.write_bytes(legacy_data+b'User notes\n')
+    (home/'report.json').write_text(json.dumps(legacy_manifest))
+    rc,out=invoke('sync')
+    check('edited legacy report is preserved and explained in the new report',rc==1 and legacy.read_bytes()==legacy_data+b'User notes\n'
+          and 'legacy report has unowned edits' in report_path.read_text(),out)
+    legacy.unlink();invoke('sync')
+    legacy.write_bytes(report_path.read_bytes())
+    rc,out=invoke('sync')
+    check('unowned legacy report is preserved even when its bytes match the current report',rc==1 and legacy.exists()
+          and 'legacy report has unowned edits' in report_path.read_text(),out)
+    legacy.unlink();invoke('sync')
     view.write_text(view.read_text().replace('- [ ] First task', '- [x] First task'))
     rc, out = invoke('sync')
     _, log = sh(['git', 'log', '-1', '--format=%B'], cwd=alpha)
@@ -1019,7 +1060,7 @@ def s_ibridge():
     view.write_text(view.read_text().replace('First task', 'Phone prose edit'))
     rc, out = invoke('sync')
     check('unsupported phone edits are preserved and reported', rc == 1 and 'Phone prose edit' in view.read_text()
-          and 'only checkbox' in (vault / 'Bridge Status.md').read_text(), out)
+          and 'only checkbox' in (vault / '_folderwise-sync-status.md').read_text(), out)
     view.write_text(view.read_text().replace('Phone prose edit', 'First task'))
     invoke('sync')
     # Adapter lives in project, uses a CSV, and hides completed rows in normal Markdown.
@@ -1073,13 +1114,13 @@ elif op=='validate':
     check('full mode exports other tracked content',rc==0 and (vault/'alpha/large.pdf').exists(),out)
     invoke('configure','--mode','lean','--max-image-bytes','5','--max-images-total-bytes','4')
     rc,out=invoke('sync')
-    status=(vault/'Bridge Status.md').read_text()
+    status=(vault/'_folderwise-sync-status.md').read_text()
     check('lean mode honors both limits and cleans unchanged owned copies',rc==0 and (vault/'alpha/docs/assets/a.png').exists()
           and not (vault/'alpha/large.pdf').exists() and not (vault/'alpha/docs/assets/unused.png').exists()
           and 'exceeds per-image limit' in status and 'exceeds aggregate image limit' in status,out)
-    stamp=(vault/'Bridge Status.md').stat().st_mtime_ns
+    stamp=(vault/'_folderwise-sync-status.md').stat().st_mtime_ns
     invoke('sync')
-    check('unchanged report does not churn every scheduled run',(vault/'Bridge Status.md').stat().st_mtime_ns==stamp)
+    check('unchanged report does not churn every scheduled run',(vault/'_folderwise-sync-status.md').stat().st_mtime_ns==stamp)
     invoke('configure','--unlimited-images')
     rc,out=invoke('sync')
     check('unlimited image setting restores all referenced images',rc==0 and (vault/'alpha/docs/assets/b.png').exists()
@@ -1107,22 +1148,86 @@ elif op=='validate':
     rc,out=invoke('sync')
     check('bridge refuses symlink destinations',rc==1 and 'symlink' in out,out)
     (vault/'alpha/docs/assets/a.png').unlink();invoke('sync')
+    # Prepare and execute the real named entry point without any OS registration.
+    import plistlib
+    rc,out=invoke('schedule-prepare')
+    preview=plistlib.loads((home/'launchagent-preview.plist').read_bytes())
+    launcher=Path(preview['ProgramArguments'][0])
+    check('schedule preparation creates the Folderwise-named executable',rc==0 and launcher.name=='folderwise-ibridgesync'
+          and os.access(launcher,os.X_OK) and str(conf) in preview['ProgramArguments'],out)
+    before=json.loads((home/'last-run.json').read_text())['last_run_epoch']
+    rc,out=sh(preview['ProgramArguments'],cwd=source)
+    check('prepared launch command runs a real foreground sync',rc==0 and json.loads((home/'last-run.json').read_text())['last_run_epoch']>before,out)
+    literal='a spaced value; $(this-must-remain-data)'
+    rc,out=sh([str(launcher),sys.executable,'-c','import sys; print(sys.argv[1])',literal],cwd=source)
+    check('named launcher preserves literal arguments without shell interpretation',rc==0 and out.strip()==literal,out)
+    owned=launcher.read_bytes();launcher.write_text('#!/bin/sh\n# user customization\n')
+    rc,out=invoke('schedule-prepare')
+    check('schedule preparation preserves an altered entry point',rc==1 and 'custom content' in out
+          and launcher.read_text()=='#!/bin/sh\n# user customization\n',out)
+    launcher.write_bytes(owned)
+    no_runtime=root/'no-runtime';no_runtime.mkdir()
+    rc,out=sh([sys.executable,str(CTX['tools']/'icloud_bridge.py'),'--config',str(conf),'schedule-prepare'],cwd=source,env={'PATH':str(no_runtime)})
+    check('schedule preparation diagnoses a missing runtime',rc==1 and 'uv not found' in out,out)
+
     # Fake OS executables exercise notification/scheduling CLI without touching launchd.
     fake=root/'fakebin';fake.mkdir()
-    for executable in ['osascript','launchctl']:
+    for executable in ['open','codesign','launchctl']:
         f=fake/executable
         f.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "'+str(root/'os-calls')+'"\nexit 0\n');f.chmod(0o755)
+    opener=fake/'open'
+    opener.write_text(opener.read_text().replace('exit 0', 'cat "'+str(home/'notification-message.txt')+'" > "'+str(root/'notification-body')+'"\ncat "'+str(home/'notification-message.txt')+'" >> "'+str(root/'os-calls')+'"\nexit 0'))
+    compiler=fake/'osacompile'
+    compiler.write_text('#!'+sys.executable+'\nimport pathlib,plistlib,sys\np=pathlib.Path(sys.argv[2])/"Contents"\n(p/"Resources").mkdir(parents=True)\n(p/"Info.plist").write_bytes(plistlib.dumps({"CFBundleName":"applet","CFBundleIconName":"applet"}))\n(p/"Resources/Assets.car").write_bytes(b"compiler icon catalog")\n(p/"Resources/main.scpt").write_bytes(pathlib.Path(sys.argv[3]).read_bytes())\n')
+    compiler.chmod(0o755)
     env={'PATH':str(fake)+os.pathsep+os.environ['PATH']}
     sandbox_env = env
     rc,out=invoke('notify-test',env=env)
-    check('notification helper uses built-in script host with data arguments',rc==0 and 'display notification' in (root/'os-calls').read_text(),out)
+    app=home/'Folderwise iBridge.app'
+    metadata=plistlib.loads((app/'Contents/Info.plist').read_bytes())
+    icon=app/'Contents/Resources/Folderwise.icns'
+    check('notification app bundles the Folderwise identity and icon',rc==0
+          and metadata['CFBundleIdentifier']=='org.folderwise.ibridge.notifications'
+          and metadata['CFBundleIconFile']=='Folderwise.icns' and metadata['LSUIElement'] and 'CFBundleIconName' not in metadata
+          and icon.read_bytes()==(CTX['tools']/'ibridge_assets/folderwise.icns').read_bytes()
+          and (app/'Contents/Resources/applet.icns').read_bytes()==icon.read_bytes()
+          and not (app/'Contents/Resources/Assets.car').exists(),out)
+    check('notification app launches and clears the message handoff', '-W -n -g '+str(app) in (root/'os-calls').read_text() and not (home/'notification-message.txt').exists(),out)
+    check('notification text is handed off as UTF-8 data', (root/'notification-body').read_text()=='Folderwise iBridge notifications work.',out)
+    check('notification test distinguishes a request from visible delivery',rc==0 and 'Notification requested; macOS controls' in out
+          and 'when mirroring or sharing the display' in out and 'can expose other apps' in out,out)
+    invoke('configure','--interval-minutes','9')
+    rc,out=invoke('notify-test','--setup-message',env=env)
+    check('one-command setup notification replay uses the configured interval',rc==0
+          and (root/'notification-body').read_text()=='folderwise-ibridge is now enabled. Sync job is running and scheduled every 9 minutes.',out)
+    invoke('configure','--interval-minutes','5')
+    rc,out=invoke('status','--setup-message',env=env)
+    check('setup notification replay flag rejects unrelated commands',rc==2 and '--setup-message requires notify-test' in out,out)
+    compiled=icon.stat().st_mtime_ns
+    rc,out=invoke('notify-test',env=env)
+    check('unchanged notification app is reused',rc==0 and icon.stat().st_mtime_ns==compiled,out)
+    manifest=home/'notifier.json'
+    saved=json.loads(manifest.read_text());saved['version']='previous release';manifest.write_text(json.dumps(saved))
+    signer=fake/'codesign';signer_body=signer.read_text();signer.write_text('#!/bin/sh\nexit 1\n')
+    rc,out=invoke('notify-test',env=env)
+    check('failed notification app update preserves the installed bundle',rc==1 and icon.stat().st_mtime_ns==compiled,out)
+    signer.write_text(signer_body)
+    rc,out=invoke('notify-test',env=env)
+    check('notification app updates when bundled inputs change',rc==0 and json.loads(manifest.read_text())['version']!='previous release',out)
+    original=icon.read_bytes();icon.write_bytes(b'user customization')
+    rc,out=invoke('notify-test',env=env)
+    check('customized notification app is preserved and delivery fails safely',rc==1 and icon.read_bytes()==b'user customization',out)
+    rc,out=invoke('uninstall',env=env)
+    check('uninstall preserves customized notification app',rc==0 and app.exists(),out)
+    icon.write_bytes(original)
+    # Restore installed state after the preservation check.
+    invoke('setup','--source',str(source),'--vault',str(vault),'--no-schedule',env=env)
     if sys.platform=='darwin':
         cfg=json.loads(conf.read_text());cfg['launchagents_dir']=str(root/'LaunchAgents');cfg['notifications']='errors';conf.write_text(json.dumps(cfg))
         rc,out=invoke('schedule-enable',env=env)
-        import plistlib
         plist=plistlib.loads((root/'LaunchAgents/org.folderwise.ibridge.plist').read_bytes())
         calls=(root/'os-calls').read_text()
-        check('schedule registers isolated LaunchAgent and announces configured interval',rc==0 and plist['StartInterval']==300
+        check('schedule registers isolated LaunchAgent and announces configured interval',rc==0 and Path(plist['ProgramArguments'][0]).name=='folderwise-ibridgesync' and plist['StartInterval']==300
               and 'bootstrap' in calls and 'scheduled every 5 minutes' in calls,out)
         rc,out=invoke('schedule-disable',env=env)
         check('schedule disable removes only the owned job definition',rc==0 and not (root/'LaunchAgents/org.folderwise.ibridge.plist').exists(),out)
@@ -1171,7 +1276,7 @@ elif op=='validate':
     rc,out=invoke('sync')
     check('malformed adapter response fails visibly without replacing the vault',rc==1 and 'JSON array' in out,out)
     cfg['adapters']={};conf.write_text(json.dumps(cfg));invoke('sync')
-    check('unmapped generated tasks are explicitly reported','requires an adapter' in (vault/'Bridge Status.md').read_text())
+    check('unmapped generated tasks are explicitly reported','requires an adapter' in (vault/'_folderwise-sync-status.md').read_text())
     conf.write_text(json.dumps(original_cfg));invoke('sync')
     # Attachment references, image ordering and unknown files remain predictable.
     original=note.read_text()
@@ -1205,9 +1310,15 @@ elif op=='validate':
         rc,out=invoke('doctor',env=env);check('doctor diagnoses stale scheduled runs',rc==1 and 'stale' in out,out)
         invoke('schedule-disable',env=env)
     # Explicit notification failure is diagnostic and never mutates task records.
-    (fake/'osascript').write_text('#!/bin/sh\nexit 1\n')
+    (fake/'open').write_text('#!/bin/sh\nexit 1\n')
     rc,out=invoke('notify-test',env=env)
-    check('notification failure is reported by the explicit test command',rc==1 and 'delivery failed' in out,out)
+    check('notification failure is reported by the explicit test command',rc==1 and 'request failed' in out,out)
+    if sys.platform=='darwin':
+        rc,out=invoke('schedule-enable',env=env)
+        check('failed setup notification does not claim delivery or undo scheduling',rc==0
+              and 'could not be requested' in out and 'Notification requested;' not in out
+              and json.loads((home/'schedule.json').read_text())['enabled'],out)
+        invoke('schedule-disable',env=env)
     (home/'bridge.log').write_text('old log\n'*150000)
     invoke('sync')
     check('local bridge log rotates instead of growing forever',(home/'bridge.previous.log').exists())
@@ -1276,9 +1387,9 @@ elif op=='validate':
     invoke('configure','--mode','lean')
     rc,out=invoke('plan');check('plan describes cleanup without removing files',rc==0 and 'REMOVE if unchanged: alpha/payload.bin' in out and collision.exists(),out)
     invoke('sync')
-    saved=(vault/'Bridge Status.md').read_text();(vault/'Bridge Status.md').write_text('User-owned status edits\n')
-    rc,out=invoke('sync');check('status report cannot overwrite user edits',rc==1 and 'unowned edits' in out and (vault/'Bridge Status.md').read_text()=='User-owned status edits\n',out)
-    (vault/'Bridge Status.md').write_text(saved)
+    saved=(vault/'_folderwise-sync-status.md').read_text();(vault/'_folderwise-sync-status.md').write_text('User-owned status edits\n')
+    rc,out=invoke('sync');check('status report cannot overwrite user edits',rc==1 and 'unowned edits' in out and (vault/'_folderwise-sync-status.md').read_text()=='User-owned status edits\n',out)
+    (vault/'_folderwise-sync-status.md').write_text(saved)
     # Obstructed destination type and incomplete setup get specific diagnostics.
     mirror.unlink();mirror.mkdir()
     rc,out=invoke('sync');check('a directory cannot masquerade as an exported file',rc==1 and 'expected a file' in out,out)
@@ -1286,7 +1397,10 @@ elif op=='validate':
     rc,out=tool('icloud_bridge.py','--config',root/'empty-state/config.json','setup')
     check('setup requires explicit source and vault',rc==1 and 'requires --source and --vault' in out,out)
     rc,out=invoke('uninstall')
-    check('uninstall cleans fully owned empty configuration folders',rc==0 and not (vault/'.obsidian').exists() and not (source/'.obsidian').exists(),out)
+    check('uninstall cleans fully owned empty configuration folders',rc==0 and not (vault/'.obsidian').exists() and not (source/'.obsidian').exists() and not launcher.exists() and not app.exists() and not (home/'notifier.json').exists(),out)
+    launcher.write_text('#!/bin/sh\n# user-owned customization\n')
+    rc,out=invoke('uninstall')
+    check('uninstall preserves a customized launch entry point',rc==0 and launcher.read_text()=='#!/bin/sh\n# user-owned customization\n',out)
 
 
 def s_ibridge_setup():
@@ -1301,8 +1415,13 @@ def s_ibridge_setup():
     sh(['git','init','-q','-b','main'],cwd=source);sh(['git','add','-A'],cwd=source);sh(['git','commit','-qm','Fixture framework'],cwd=source)
     sh(['git','remote','add','origin',str(source)],cwd=source)
     fake=root/'fakebin';fake.mkdir()
-    for name in ['osascript','launchctl']:
+    for name in ['open','codesign','launchctl']:
         p=fake/name;p.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "'+str(root/'os-calls')+'"\nexit 0\n');p.chmod(0o755)
+    opener=fake/'open'
+    opener.write_text(opener.read_text().replace('exit 0', 'cat "'+str(home/'notification-message.txt')+'" > "'+str(root/'notification-body')+'"\ncat "'+str(home/'notification-message.txt')+'" >> "'+str(root/'os-calls')+'"\nexit 0'))
+    compiler=fake/'osacompile'
+    compiler.write_text('#!'+sys.executable+'\nimport pathlib,plistlib,sys\np=pathlib.Path(sys.argv[2])/"Contents"\n(p/"Resources").mkdir(parents=True)\n(p/"Info.plist").write_bytes(plistlib.dumps({"CFBundleName":"applet","CFBundleIconName":"applet"}))\n(p/"Resources/Assets.car").write_bytes(b"compiler icon catalog")\n(p/"Resources/main.scpt").write_bytes(pathlib.Path(sys.argv[3]).read_bytes())\n')
+    compiler.chmod(0o755)
     env={'PATH':str(fake)+os.pathsep+os.environ['PATH'],'HOME':str(root/'fake-home')}
 
     def local(name,*args):
