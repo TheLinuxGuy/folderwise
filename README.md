@@ -106,7 +106,7 @@ Every tool, flag and setting is documented in the [full guide](docs/guide.md).
 <sub>Obsidian demo with fictional notes. Cross-project links shown are demo-only; Folderwise currently validates links within each repository.</sub>
 
 
-Browse your docs in Obsidian and manage every project’s tasks from one iPhone dashboard. Check off a task on your phone (or, once a project opts in, rename it); your Mac updates the source files and commits the change while keeping your repositories outside iCloud. [Set up Obsidian + iCloud →](docs/obsidian.md)
+Browse your docs in Obsidian and manage every project’s tasks from one iPhone dashboard. Check off a task on your phone (or, once a project opts in, rename it); your Mac updates the source files and commits the change while keeping your repositories outside iCloud. [Set up Obsidian + iCloud →](docs/obsidian.md) · [Bridge test cases and iPhone acceptance checklist](docs/ibridge-testing.md)
 
 **🔔 Mac alerts when sync needs attention.** Receive setup confirmations and alerts for detected sync issues. Open your vault’s [_folderwise-sync-status.md](docs/obsidian.md#bridge-status-report) for details.
 

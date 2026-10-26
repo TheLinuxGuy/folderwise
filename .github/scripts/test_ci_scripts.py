@@ -104,6 +104,76 @@ class PublicDocsTests(unittest.TestCase):
                 module.public_documentation()
 
 
+SELFTEST_FIXTURE = """
+def s_ibridge_demo():
+    def rejected(label, edit):
+        check(label, True)
+    check('first check', True)
+    rejected('helper check', None)
+    check('dynamic ' + name, True)
+SECTIONS = [("create", s_create), ("ibridge", s_ibridge_demo), ("ibridge_extra", s_x)]
+"""
+DOC_FIXTURE = """# Fictional page
+Sections `ibridge` and `ibridge_extra`.
+## Traceability table
+| ID | Scenario | Automated checks | Device |
+| --- | --- | --- | --- |
+| A1 | one | `first check`<br>`helper check` | none |
+| A2 | two | Manual only | phone |
+| A3 | three | Gap | none |
+## Next
+| B1 | outside the table | `not a check` | x |
+"""
+
+
+class BridgeTestingDocTests(unittest.TestCase):
+    def setUp(self):
+        self.mod = load("test_public_docs")
+
+    def problems(self, doc=DOC_FIXTURE, source=SELFTEST_FIXTURE):
+        return self.mod.ibridge_doc_problems(doc, source)
+
+    def test_inventory_reads_literal_labels_and_sections_without_running_code(self):
+        labels, sections = self.mod.selftest_inventory(SELFTEST_FIXTURE)
+        self.assertEqual(labels, {"first check", "helper check"})
+        self.assertEqual(sections, ["create", "ibridge", "ibridge_extra"])
+
+    def test_consistent_page_passes_and_gaps_are_reported(self):
+        self.assertEqual(self.problems(), ([], ["A3"], 3))
+
+    def test_renamed_or_removed_self_test_breaks_the_page(self):
+        problems, _, _ = self.problems(source=SELFTEST_FIXTURE.replace("first check", "renamed check"))
+        self.assertEqual(problems, ["A1: unknown self-test check label 'first check'"])
+
+    def test_every_ibridge_section_must_be_mentioned(self):
+        problems, _, _ = self.problems(doc=DOC_FIXTURE.replace("`ibridge_extra`", "ibridge_extra"))
+        self.assertEqual(problems, ["self-test section 'ibridge_extra' is not mentioned in backticks"])
+
+    def test_scenario_needs_a_check_or_an_explicit_marker(self):
+        problems, _, _ = self.problems(doc=DOC_FIXTURE.replace("| A2 | two | Manual only |", "| A2 | two | to do |"))
+        self.assertEqual(problems, ["A2: no automated check cited and no 'Manual only' or 'Gap' marker"])
+
+    def test_marker_word_inside_a_cited_label_is_not_a_marker(self):
+        source = SELFTEST_FIXTURE.replace("first check", "gap in coverage")
+        doc = DOC_FIXTURE.replace("`first check`", "`gap in coverage`")
+        self.assertEqual(self.problems(doc, source)[1], ["A3"])
+
+    def test_missing_or_malformed_table_and_duplicate_ids_fail(self):
+        self.assertIn("no scenario rows under '## Traceability table'", self.problems(doc="# Page `ibridge` `ibridge_extra`")[0])
+        self.assertIn("duplicate scenario ID A1", self.problems(doc=DOC_FIXTURE.replace("| A2 |", "| A1 |"))[0])
+        self.assertTrue(any("expected 4 columns" in p for p in self.problems(doc=DOC_FIXTURE.replace("| none |", "|", 1))[0]))
+
+    def test_source_without_ibridge_sections_fails(self):
+        problems, _, _ = self.problems(source="SECTIONS = [('create', s_create)]\ncheck('first check', True)\n")
+        self.assertIn("no ibridge sections found in _tools/selftest.py SECTIONS", problems)
+
+    def test_real_page_is_consistent_with_the_real_self_test(self):
+        doc, source = REPO / "docs/ibridge-testing.md", REPO / "_tools/selftest.py"
+        if not (doc.is_file() and source.is_file()):
+            self.skipTest("full development checkout only")
+        self.assertEqual(self.problems(doc.read_text(), source.read_text())[0], [])
+
+
 class VersionTests(unittest.TestCase):
     def test_valid_and_invalid(self):
         for v, pre in [("0.1.0", False), ("1.2.3", False), ("10.20.30", False), ("1.2.3-rc.1", True), ("1.0.0-alpha", True), ("1.0.0-0.3.7", True)]:

@@ -114,3 +114,5 @@ Actions are pinned to full commit SHAs with the version in a comment; Dependabot
 ## Minimal installation validation
 
 CI runs `uv run .github/scripts/test_public_docs.py` against the full source checkout; the installed `uv run _tools/selftest.py` needs no public guides or root README. The clean-install jobs also create a minimal clone with `python3 _tools/framework_checkout.py --minimal` and run its self-test on Linux and macOS. Self-test fixtures exercise direct pulls, the update command, future folder inclusion/exclusion, local-file refusal, restoration, and preservation of an independent repository. Full release archives continue to include the public guides.
+
+The same public-documentation check also keeps [the iCloud bridge test cases and acceptance checklist](ibridge-testing.md) in step with `_tools/selftest.py`: every self-test check it cites must exist verbatim, every `ibridge*` section must be mentioned, and every scenario must cite a check or be marked manual-only (or as an explicit gap). Renaming or removing a bridge self-test therefore requires updating that page in the same change.
