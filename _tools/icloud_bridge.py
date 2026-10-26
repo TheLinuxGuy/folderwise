@@ -677,8 +677,7 @@ def sync(settings, home, dry=False):
         issues.append(f'{LEGACY_REPORT}: legacy report has unowned edits; preserved. Move it outside the vault after review.')
     status = report(files, omissions, issues, settings, managed_bytes)
     target = safe(vault, REPORT)
-    owned_hash = previous_report.get('hash') if previous_report.get('path') == REPORT else None
-    if target.exists() and content_hash(target) not in {owned_hash, digest(status)}:
+    if target.exists() and content_hash(target) not in {previous_report.get('hash'), digest(status)}:
         raise ValueError(f'{REPORT} has unowned edits; preserve/rename it before retrying')
     if not target.exists() or target.read_bytes() != status:
         atomic(target, status)

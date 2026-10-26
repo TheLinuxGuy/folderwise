@@ -166,7 +166,7 @@ Limits apply to individual images and all selected images across enabled project
 
 ### Bridge status report
 
-The generated `_folderwise-sync-status.md` lives at the root of your iCloud vault. It lists sync issues and gives you details to investigate a notification. On upgrade, the bridge replaces an unchanged, bridge-owned `Bridge Status.md` with this name. Edited or unowned legacy reports are preserved and flagged in the new report; review and move them outside the vault to clear the warning. An existing edited destination is never overwritten.
+The generated `_folderwise-sync-status.md` lives at the root of your iCloud vault. It lists sync issues and gives you details to investigate a notification. On upgrade, the bridge replaces an unchanged, bridge-owned `Bridge Status.md` with this name. An already-renamed, unchanged report is recognized too. Edited or unowned legacy reports are preserved and flagged in the new report; review and move them outside the vault to clear the warning. An existing edited destination is never overwritten.
 
 `_folderwise-sync-status.md` lists omitted files, sizes and reasons, including configured-limit omissions and missing/untracked referenced images. It reports selected export bytes, selected image bytes, and currently present managed payload bytes, **not** account free space or an iCloud bill. Current payload size excludes generated status/settings and unowned files, and can exceed the new selection when a conflict prevents cleanup. Obsidian plugins, unrelated vault files, iCloud retention and other account data can consume additional storage. Lowering limits removes only unchanged bridge-owned copies; modified phone files are preserved and reported. The report only changes when its meaningful content changes.
 
