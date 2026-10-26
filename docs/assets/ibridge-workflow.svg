@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="960" viewBox="0 0 560 960" role="img" aria-labelledby="title desc">
+  <title id="title">Folderwise's optional iCloud bridge</title>
+  <desc id="desc">Authoritative Mac project repositories stay outside iCloud. Selected copies go to a separate iCloud vault used by Obsidian on iPhone. Supported phone edits return to Mac for validation and local Git commits. The Mac must be available; the default schedule is five minutes plus iCloud delivery time.</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#087f78"/></marker></defs>
+  <rect width="560" height="960" rx="18" fill="#f5f3ec"/>
+  <path d="M18 4H542" stroke="#087f78" stroke-width="8"/>
+  <g font-family="Arial, sans-serif" fill="#24393b" text-anchor="middle">
+    <text x="280" y="54" font-size="28" font-weight="700">Your files. A separate phone vault.</text>
+    <rect x="28" y="93" width="504" height="183" rx="18" fill="#fff" stroke="#b8ceca"/>
+    <text x="280" y="136" font-size="27" font-weight="700">Mac project repositories</text>
+    <text x="280" y="174" font-size="21">Authoritative Markdown + CSV records</text>
+    <text x="280" y="208" font-size="21">Independent Git histories · outside iCloud</text>
+    <text x="280" y="246" font-size="21" fill="#087f78">Validated local commits · no pushes</text>
+    <g font-size="20" fill="#526465">
+      <text x="210" y="317">Selected copies</text>
+      <text x="365" y="317">Supported edits</text>
+      <text x="365" y="345">Validate on Mac</text>
+    </g>
+    <g stroke="#087f78" stroke-width="3" fill="none" marker-end="url(#arrow)">
+      <path d="M90 277V404"/>
+      <path d="M480 421V282"/>
+    </g>
+    <rect x="28" y="422" width="504" height="163" rx="18" fill="#e3efeb" stroke="#b8ceca"/>
+    <text x="280" y="467" font-size="27" font-weight="700">Separate iCloud vault</text>
+    <text x="280" y="506" font-size="21">Selected exported documents</text>
+    <text x="280" y="542" font-size="21">Generated task views across projects</text>
+    <path d="M280 604V689" stroke="#087f78" stroke-width="3" fill="none" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <text x="154" y="642" font-size="20" fill="#526465">iCloud</text>
+    <text x="154" y="669" font-size="20" fill="#526465">delivery</text>
+    <rect x="28" y="711" width="504" height="140" rx="18" fill="#fff" stroke="#b8ceca"/>
+    <text x="280" y="758" font-size="27" font-weight="700">Obsidian on iPhone</text>
+    <text x="280" y="797" font-size="21">Read · complete · reopen</text>
+    <text x="280" y="828" font-size="20">Task renames + selected note edits: opt-in</text>
+    <text x="280" y="898" font-size="21" font-weight="700">Mac available for imports and commits</text>
+    <text x="280" y="932" font-size="20" fill="#526465">5-minute default schedule + iCloud delivery delay</text>
+  </g>
+</svg>
