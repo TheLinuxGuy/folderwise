@@ -9,7 +9,7 @@
 [![Coverage](https://codecov.io/gh/TheLinuxGuy/folderwise/graph/badge.svg)](https://codecov.io/gh/TheLinuxGuy/folderwise)
 [![Latest release](https://img.shields.io/github/v/release/TheLinuxGuy/folderwise?display_name=tag&sort=semver)](https://github.com/TheLinuxGuy/folderwise/releases/latest)
 
-[Overview](#-a-place-for-what-you-know) · [What's new](#-whats-new) · [Get started](#-getting-started) · [See it in Obsidian](#-see-it-in-obsidian) · [Documentation](docs/guide.md)
+[Overview](#-a-place-for-what-you-know) · [What's new](#-whats-new) · [Get started](#-getting-started) · [iPhone workflow](#-your-projects-on-iphone) · [Documentation](docs/guide.md)
 
 </div>
 
@@ -92,34 +92,39 @@ Folderwise includes metadata and link validation, CSV-to-Markdown tables, genera
 | 🔎 `docs_index.py` / `docs_recent.py` / `docs_stale.py` | what exists, what changed lately, what is due for re-verification |
 | 🔀 `docs_mv.py` | moves or renames docs and headings and keeps every link valid |
 | 📊 `render_tables.py` | renders CSV files into Markdown tables |
-| ☁️ `icloud_bridge.py` | mirror projects into iCloud, complete or rename tasks across projects on iPhone, and commit changes on Mac |
+| ☁️ `icloud_bridge.py` | export selected files to iCloud; complete/reopen tasks in Obsidian on iPhone; validate and commit locally on Mac |
 | 🩺 `docs_doctor.py` / `sync_rules.py` | health-check projects; push the template's shared rules into them |
 
 Every tool, flag and setting is documented in the [full guide](docs/guide.md).
 
-## 🔮 See it in Obsidian
+## 📱 Your projects on iPhone
+
+**Read your documents and manage tasks across projects in Obsidian on iPhone.** The optional iCloud bridge exports selected files to a separate vault while your authoritative Markdown-and-Git repositories stay on your Mac. Folderwise is a knowledge framework; Obsidian provides the phone app.
+
+<p align="center">
+  <img src="docs/assets/ibridge-iphone-dashboard.png" alt="Real Obsidian iPhone dashboard showing open Markdown and CSV-backed tasks from two fictional projects, with completed tasks below" width="400">
+</p>
+
+- **Complete and reopen tasks** from one dashboard. CSV-backed tasks need a configured project adapter.
+- **Rename tasks** with per-project opt-in, or **edit selected notes** with both the bridge text-edit switch and project path-pattern opt-in. Generated task views accept only supported task edits.
+- **Keep a local history.** An available Mac validates imports against clean working trees and conflict rules, updates source files, and commits locally. Local commits do not push to GitHub.
+
+The iPhone bridge supports nested and quoted tasks, Tasks dates/priorities and custom statuses, and plugin-generated recurrence. See the [task compatibility and acceptance requirements](docs/obsidian.md#task-format-compatibility).
+
+Scheduled sync defaults to **five minutes, plus iCloud delivery delay**. Folderwise provides no hosted sync service.
+
+**[Set up Obsidian + iCloud →](docs/obsidian.md)** · [See the task round trip](docs/obsidian.md#complete-and-reopen-from-iphone) · [Acceptance checklist](docs/ibridge-testing.md)
+
+<details>
+<summary>Browse your knowledge on the desktop, too</summary>
 
 <p align="center">
   <img src="docs/assets/obsidian-local-graph.png" alt="Fictional Docker host documentation beside its related notes in Obsidian's local graph" width="800">
 </p>
 
-<sub>Obsidian demo with fictional notes. Cross-project links shown are demo-only; Folderwise currently validates links within each repository.</sub>
+Obsidian demo with fictional notes. Cross-project links shown are demo-only; Folderwise currently validates links within each repository. [Understand the repository layout](docs/framework-checkout.md).
 
-
-Browse your docs in Obsidian and manage every project’s tasks from one iPhone dashboard. Check off a task on your phone (or, once a project opts in, rename it or edit selected notes); your Mac updates the source files and commits the change while keeping your repositories outside iCloud. [Set up Obsidian + iCloud →](docs/obsidian.md) · [Bridge test cases and iPhone acceptance checklist](docs/ibridge-testing.md)
-
-The iPhone bridge supports nested and quoted tasks, Tasks dates/priorities and custom statuses, and plugin-generated recurrence. See the [task compatibility and acceptance requirements](docs/obsidian.md#task-format-compatibility).
-
-**🔔 Mac alerts when sync needs attention.** Receive setup confirmations and alerts for detected sync issues. Open your vault’s [_folderwise-sync-status.md](docs/obsidian.md#bridge-status-report) for details.
-
-<p align="center">
-  <img src="docs/assets/ibridge-macos-notification.png" alt="Folderwise iBridge setup notification on macOS confirming that sync is scheduled every five minutes" width="364">
-</p>
-
-<sub>Actual Mac setup confirmation. Sync issue alerts use the same Folderwise name and logo. [Notification settings and visibility](docs/obsidian.md#a-notification-appears-only-in-notification-center).</sub>
-
-> [!NOTE]
-> Your topic folders are separate repositories, ignored by the framework's Git checkout. The optional bridge copies selected project files into your own iCloud vault; Folderwise provides no hosted sync service. [Understand the layout](docs/framework-checkout.md).
+</details>
 
 ## 🔄 Keep it current
 

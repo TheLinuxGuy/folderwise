@@ -4,6 +4,25 @@ The optional **folderwise-ibridge** keeps your project repositories on your Mac 
 
 The bridge is deliberately simple: checking means complete; unchecking means incomplete. It does **not** interpret a task, confirm evidence, or establish that the described action happened. Task changes do not advance `last_verified`. Project adapters must implement this same boolean behavior without fabricating evidence. A project can additionally accept task **renames** from the phone; see [Rename tasks from iPhone](#rename-tasks-from-iphone-opt-in). Selected notes can accept **text edits** too; see [Edit notes from iPhone](#edit-notes-from-iphone-opt-in).
 
+## From Mac files to your phone
+
+Folderwise is a Markdown-and-Git knowledge framework, not a standalone iPhone app. **Obsidian** provides the phone interface; the optional bridge connects selected exports to your local repositories. Folderwise provides no hosted sync service.
+
+<p align="center">
+  <img src="assets/ibridge-workflow.svg" alt="Mac repositories outside iCloud export selected copies to a separate iCloud vault used by Obsidian on iPhone; supported edits return for Mac validation and local Git commits" width="520">
+</p>
+
+The Mac must be available for imports and local commits. Scheduled sync defaults to **five minutes**, with additional iCloud delivery delay; this is not instant or real-time sync. Selected-note edits also wait for their quiet period. Imports require a clean project working tree, validation and conflict checks. Local commits do not imply GitHub pushes.
+
+| On iPhone | What is supported |
+| --- | --- |
+| Read documents | Selected tracked files exported into the separate vault |
+| Complete or reopen a task | Checkbox toggles in generated task views or supported handwritten source checkboxes; CSV tasks need a configured adapter |
+| Rename a task | Per-project `folderwise-ibridgerename: true`; edit the generated task view and preserve its source link; adapter tasks must permit title edits |
+| Edit selected copied notes | Bridge `--text-edits on` **and** project `folderwise-ibridgeedit` patterns; protected regions, quiet period and conflict rules still apply |
+
+Generated task views have stricter rules than opted-in copied notes: they are task projections, not free-form documents. The screenshots below illustrate task operations, **not selected-note text editing**.
+
 ## Layout and prerequisites
 
 Use one vault for all project folders. Your source parent remains outside iCloud, for example `~/folderwise/`, with independent project repositories underneath. Create a **separate** vault in Obsidian under `iCloud Drive/Obsidian/Folderwise`. Do not move the source repositories, put Git history in the vault, or synchronize that vault with a second cloud service.
@@ -47,6 +66,16 @@ Configuration, ownership records, baselines, temporary clones, export journal an
 ## Central task dashboard
 
 In Obsidian on Mac and iPhone, install and enable the community **Tasks** plugin (`obsidian-tasks-plugin`). Open the exported root `Tasks.md` in reading mode. It includes open and completed tasks across all enabled projects, grouped by project. Every result links to its source document. Undated and nested tasks are included; no tag is required. Tasks inside fenced code examples, front matter and generated blocks are excluded from generic Markdown scanning.
+
+### Complete and reopen from iPhone
+
+Tick a task in `Tasks.md` to complete it. Untick it in **Completed tasks** to reopen it, including an adapter-backed row hidden by the project's normal backlog. Let iCloud deliver the edit and the Mac run the next scheduled import; then check the returned source note and **Recent imports** in `_folderwise-sync-status.md`.
+
+<p align="center">
+  <img src="assets/ibridge-task-cycle.png" alt="Four separate iPhone capture excerpts: a CSV task completed before sync, an empty returned source backlog, a different completed CSV task reopened before sync, and that reopened row in the returned source backlog" width="440">
+</p>
+
+*Real-device acceptance captures with fictional data and a configured CSV adapter. These show two different demo tasks: one completed and another reopened. Panels 1 and 3 are phone state before sync; panels 2 and 4 are returned source views after sync. Screenshots support the visual sequence; verify local commits separately with the [acceptance checklist](ibridge-testing.md#2-complete-tasks-from-the-dashboard). They do not independently establish Git history or selected-note editing.*
 
 ### Generated task folder and naming
 
@@ -110,6 +139,12 @@ Renaming is off by default. To allow it for a project, add this to its `.docs.ya
 ```yaml
 folderwise-ibridgerename: true
 ```
+
+<p align="center">
+  <img src="assets/ibridge-task-rename.png" alt="Returned Obsidian task view with title edits enabled and the control task renamed on iPhone, retaining its source link" width="440">
+</p>
+
+*Authentic returned task-view excerpt with fictional data. This shows the renamed title on the phone; the [rename acceptance test](ibridge-testing.md#5-opt-in-rename-test) verifies the source, local commit and status entry separately.*
 
 The value must be a boolean. After the next sync the project's generated view says that title edits are imported. Then, on iPhone:
 
@@ -342,6 +377,14 @@ Use the same `--config /absolute/path/config.json` argument as your installed br
 ## Conflicts and recovery
 
 Phone imports are evaluated against the last accepted baseline, not modification timestamps. A rejected edit to a **generated task view** is saved to the bridge state's `rejected/` folder (private to your user, outside iCloud, kept 30 days), the view is restored, the edit is listed in the status report, and other projects keep syncing. A pending edit that conflicts with a Mac-side change (for example a toggle or rename of a task that was renamed on the Mac) is handled the same way. Unsupported or conflicting edits to a **copied source note**, and failures such as a dirty project or a failed hook, pause that project (below) so nothing is overwritten; the error names the file and line.
+
+<p>
+  <img src="assets/ibridge-macos-error.png" alt="Actual Folderwise iBridge error banner saying the bridge needs attention and directing the user to the vault sync status report" width="360">
+</p>
+
+*Actual attention banner from the fictional acceptance test, distinct from the setup-success notification above. The banner directs you to `_folderwise-sync-status.md`; it does not by itself prove the rejected text was saved or the source stayed unchanged.*
+
+For a rejected generated-view edit, read **Phone edits not applied**, inspect the restored view and use the private Mac recovery copy if you need the rejected wording. For a paused copied note, inspect **Paused projects** and preserve the pending text before resolving it. Do not treat either kind of notification as proof of a successful import.
 
 **One project's problem pauses only that project.** A dirty source tree, a failed hook or adapter, an unsupported edit to a copied note, an unsafe link, or a changed vault file pauses the project it belongs to: its imports and exports wait, its vault copies and pending phone edits stay exactly as they are, and the status report says `Paused projects: <names>`. Other projects keep importing, exporting and committing. The attention alert fires once per distinct problem. Problems that belong to no project (the dashboard, the status report, an interrupted export journal) still freeze every export. Fix the cause and the next sync resumes the project; no state needs to be erased.
 
