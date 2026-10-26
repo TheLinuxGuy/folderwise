@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import errno
 import fcntl
 import hashlib
 import json
@@ -23,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote, urlsplit
@@ -41,6 +43,11 @@ REPORT, DASHBOARD, TASK_DIR = "_folderwise-sync-status.md", "Tasks.md", "_Folder
 IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif", ".heic", ".bmp"}
 SKIP = {"AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", "_doc-template.md", "node_modules", "__pycache__", "#recycle", "credentials.json", "id_rsa", "id_ed25519"}
 CHECKBOX = re.compile(r"^(\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\].*)$")
+SOURCE_TAIL = " ([source]("
+MAX_TITLE = 200
+KEEP_DAYS, KEEP_ENTRIES = 30, 10
+# iCloud can briefly lock a file it is syncing; these are retried, not reported.
+TRANSIENT = {errno.EDEADLK, errno.EAGAIN, errno.EBUSY, errno.ETIMEDOUT}
 DEFAULT_HOME = Path.home() / ("Library/Application Support/Folderwise/ibridge" if sys.platform == "darwin" else ".local/state/folderwise-ibridge")
 
 
@@ -157,11 +164,18 @@ def projects(settings, include_disabled=False):
         enabled = cfg.get("folderwise-ibridgesync", False)
         if type(enabled) is not bool:
             raise ValueError(f"{p.name}: folderwise-ibridgesync must be boolean")
+        if type(cfg.get("folderwise-ibridgerename", False)) is not bool:
+            raise ValueError(f"{p.name}: folderwise-ibridgerename must be boolean")
         if enabled or include_disabled:
             if Path(git(p, "rev-parse", "--show-toplevel").strip()).resolve() != p.resolve():
                 raise ValueError(f"{p.name}: expected an independent Git repository")
             result.append(p)
     return result
+
+
+def rename_projects(settings):
+    """Names of enabled projects whose phone title edits are allowed (opt-in, default off)."""
+    return {p.name for p in projects(settings) if dl.load_config(p).get("folderwise-ibridgerename", False)}
 
 
 def tracked(project):
@@ -220,6 +234,12 @@ def markdown_tasks(text, path):
     return tasks
 
 
+def view_title(title):
+    """The title as the generated view shows it: one line, links and images reduced to their text."""
+    title = re.sub(r"[\r\n]", " ", title)
+    return re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", title)
+
+
 def adapter(settings, project, operation, changes=None):
     command = settings.get("adapters", {}).get(project.name)
     if not command:
@@ -241,6 +261,9 @@ def adapter(settings, project, operation, changes=None):
         ids.add(task["id"])
         if not safe(project, task["path"]).is_file() or not isinstance(task.get("title"), str):
             raise ValueError("adapter tasks need a title and an existing source document path")
+        editable = task.get("editable", [])
+        if not isinstance(editable, list) or not all(isinstance(s, str) for s in editable):
+            raise ValueError("adapter task editable must be a list of field names")
         task["id"] = "adapter:" + task["id"]
     return tasks
 
@@ -297,14 +320,15 @@ def inventory(settings, selected_projects=None):
             if image:
                 total_images += size
             files[key] = p
-        projection = [f"# {project.name} tasks", "", "Generated task view. Only checkbox toggles are imported.", ""]
+        can_rename = dl.load_config(project).get("folderwise-ibridgerename", False)
+        note = ("Generated task view. Checkbox toggles and title edits are imported; keep each line's trailing (source) link."
+                if can_rename else "Generated task view. Only checkbox toggles are imported.")
+        projection = [f"# {project.name} tasks", "", note, ""]
         mapping = []
         for task in local_tasks:
-            title = re.sub(r"[\r\n]", " ", task["title"])
-            title = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", title)
             target = quote(project.name + "/" + task["path"], safe="/")
             mapping.append(dict(line=len(projection), id=task["id"], checked=task["checked"]))
-            projection.append(f"- [{'x' if task['checked'] else ' '}] {title} ([source](../{target}))")
+            projection.append(f"- [{'x' if task['checked'] else ' '}] {view_title(task['title'])}{SOURCE_TAIL}../{target}))")
         files[f"{TASK_DIR}/{project.name}.md"] = ("\n".join(projection) + "\n").encode()
         tasks[project.name]["_projection"] = mapping
     files[DASHBOARD] = ("# All projects\n\n## Open tasks\n\n```tasks\npath includes " + TASK_DIR +
@@ -313,23 +337,105 @@ def inventory(settings, selected_projects=None):
     return files, tasks, omissions
 
 
+class Rejected(ValueError):
+    """A phone edit the Mac will not apply. A generated view can be restored once its text is saved."""
+
+
 def task_changes(base, current):
     before, after = base.splitlines(keepends=True), current.splitlines(keepends=True)
     if len(before) != len(after):
-        raise ValueError("only checkbox on/off changes are supported")
+        raise Rejected("only checkbox on/off changes are supported (the number of lines changed)")
     changed = {}
     for i, (old, new) in enumerate(zip(before, after)):
         if old == new:
             continue
         a, b = CHECKBOX.match(old.rstrip("\r\n")), CHECKBOX.match(new.rstrip("\r\n"))
         if not a or not b or a[1] != b[1] or a[3] != b[3] or old[len(old.rstrip('\r\n')):] != new[len(new.rstrip('\r\n')):]:
-            raise ValueError("only checkbox on/off changes are supported")
-        changed[i] = b[2] != " "
+            raise Rejected(f"line {i + 1}: only checkbox on/off changes are supported")
+        changed[i] = dict(checked=b[2] != " ", title=None)
     return changed
 
 
-def requests(vault, state):
-    wanted = {}
+def clean_title(title):
+    """Normalize and validate a phone-typed title; return the text that may be written to the source."""
+    text = unicodedata.normalize("NFC", title).strip()
+    if not text or len(text) > MAX_TITLE:
+        raise Rejected(f"a title must be 1-{MAX_TITLE} characters")
+    if any(unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") for c in text):
+        raise Rejected("a title cannot contain control, direction or line-break characters")
+    if "<!--" in text or "-->" in text or SOURCE_TAIL in text or text[0] in "=+-@" or re.match(r"\[[ xX]\]", text):
+        raise Rejected("a title cannot contain comment markers, a source link or a checkbox, or start with = + - @")
+    if view_title(text) != text:
+        raise Rejected("a title cannot contain links or images; edit it on the Mac")
+    return text
+
+
+def split_view(line):
+    """Split a generated view line into (head, mark, title, tail, line ending), or None."""
+    body = line.rstrip("\r\n")
+    m = CHECKBOX.match(body)
+    if not m or not m[3].startswith("] "):
+        return None
+    rest = m[3][2:]
+    cut = rest.rfind(SOURCE_TAIL)
+    if cut < 0 or not rest.endswith("))"):
+        return None
+    return m[1], m[2], rest[:cut], rest[cut:], line[len(body):]
+
+
+def view_changes(base, current, renames):
+    """Toggles and, when allowed, title edits in a generated view; anything else is rejected."""
+    before, after = base.splitlines(keepends=True), current.splitlines(keepends=True)
+    if len(before) != len(after):
+        raise Rejected("only checkbox on/off changes are supported (the number of lines changed)")
+    known = [parts[2] for parts in map(split_view, before) if parts]
+    changed, fresh = {}, []
+    for i, (old, new) in enumerate(zip(before, after)):
+        if old == new:
+            continue
+        a, b = split_view(old), split_view(new)
+        if not a or not b or a[0] != b[0] or a[3] != b[3] or a[4] != b[4]:
+            raise Rejected(f"line {i + 1}: " + ("keep the checkbox and the trailing source link" if renames
+                                                else "only checkbox on/off changes are supported"))
+        title = None
+        if a[2] != b[2]:
+            if not renames:
+                raise Rejected(f"line {i + 1}: only checkbox on/off changes are supported (title edits are off for this project)")
+            try:
+                title = clean_title(b[2])
+            except Rejected as exc:
+                raise Rejected(f"line {i + 1}: {exc}") from None
+            if title == a[2]:
+                title = None
+            elif title in known or title in fresh:
+                raise Rejected(f"line {i + 1}: that title is already used by another task; "
+                               "reordering or duplicating tasks is not supported")
+            else:
+                fresh.append(title)
+        checked = None if a[1] == b[1] else b[1] != " "
+        if checked is not None or title is not None:
+            changed[i] = dict(checked=checked, title=title)
+    return changed
+
+
+def merge_edits(target, staged):
+    """Merge one file's task edits into the project's; two files may not disagree about a task."""
+    merged = {key: dict(value) for key, value in target.items()}
+    for key, change in staged.items():
+        prior = merged.get(key)
+        if prior:
+            for field in ("checked", "title"):
+                if prior[field] is not None and change[field] is not None and prior[field] != change[field]:
+                    raise Rejected("conflicting edits of the same task")
+            change = {field: prior[field] if change[field] is None else change[field] for field in prior}
+        merged[key] = change
+    return merged
+
+
+def requests(vault, state, renames=frozenset()):
+    """Collect phone edits: (wanted per project, files each project's edits came from,
+    vault hashes accepted as valid, generated views rejected with the reason)."""
+    wanted, sources, accepted, rejected = {}, {}, {}, {}
     for key, entry in state.get("files", {}).items():
         p = safe(vault, key)
         if not p.is_file() or "text" not in entry:
@@ -337,30 +443,64 @@ def requests(vault, state):
         data = p.read_text()
         if data == entry["text"]:
             continue
-        delta = task_changes(entry["text"], data)
-        mapping = {t["line"]: t for t in entry.get("tasks", [])}
         project = entry.get("project")
-        for line, checked in delta.items():
-            if line not in mapping:
-                raise ValueError(f"{key}: checkbox has no authoritative task mapping")
-            task = mapping[line]
-            target = wanted.setdefault(project, {})
-            if task["id"] in target and target[task["id"]] != checked:
-                raise ValueError(f"{key}: conflicting toggles of the same task")
-            target[task["id"]] = checked
-    return wanted
+        view = key.startswith(TASK_DIR + "/")
+        try:
+            delta = view_changes(entry["text"], data, project in renames) if view else task_changes(entry["text"], data)
+            mapping = {t["line"]: t for t in entry.get("tasks", [])}
+            staged = {}
+            for line, change in delta.items():
+                if line not in mapping:
+                    raise Rejected("checkbox has no authoritative task mapping")
+                staged[mapping[line]["id"]] = change
+            wanted[project] = merge_edits(wanted.get(project, {}), staged)
+        except Rejected as exc:
+            if not view:
+                raise ValueError(f"{key}: {exc}") from None
+            rejected[key] = str(exc)
+            continue
+        sources.setdefault(project, set()).add(key)
+        accepted[key] = content_hash(p)
+    return wanted, sources, accepted, rejected
+
+
+def rewrite_task(line, checked, title):
+    """Change one task line's checkbox and/or title, keeping its bullet, spacing and line ending."""
+    body = line.rstrip("\r\n")
+    m = CHECKBOX.match(body)
+    rest = m[3][1:]
+    if title is not None:
+        rest = rest[:len(rest) - len(rest.lstrip())] + title + rest[len(rest.rstrip()):]
+    mark = m[2] if checked is None else ("x" if checked else " ")
+    return m[1] + mark + "]" + rest + line[len(body):]
 
 
 def import_project(settings, project, wanted, baseline, current, home):
-    for key in wanted:
+    toggles, renames = {}, {}
+    for key, want in wanted.items():
         if key not in current or key not in baseline:
-            raise ValueError(f"{project.name}: task changed or disappeared on Mac; resolve pending toggle")
+            raise Rejected(f"{project.name}: task changed or disappeared on Mac; resolve pending edit")
         task, old = current[key], baseline[key]
         if task.get("duplicate") and task["source_hash"] != old.get("source_hash"):
-            raise ValueError(f"{project.name}: duplicate task moved during concurrent edit")
-    changes = {key: value for key, value in wanted.items() if current[key]["checked"] != value}
-    if not changes:
-        return
+            raise Rejected(f"{project.name}: duplicate task moved during concurrent edit")
+        if want["checked"] is not None and task["checked"] != want["checked"]:
+            toggles[key] = want["checked"]
+        title = want["title"]
+        if title is not None and title != task["title"]:
+            reason = None
+            if task["title"] != old["title"]:
+                reason = "its title also changed on the Mac"
+            elif task.get("duplicate"):
+                reason = "other tasks share its title"
+            elif not task["title"] or view_title(task["title"]) != task["title"]:
+                reason = "its title is empty or contains links or images"
+            elif key.startswith("adapter:") and "title" not in task.get("editable", []):
+                reason = "its adapter does not allow title edits"
+            if reason:
+                raise Rejected(f"{project.name}: a task cannot be renamed from the phone ({reason}); edit it on the Mac")
+            renames[key] = title
+    if not toggles and not renames:
+        return None
     if git(project, "status", "--porcelain"):
         raise ValueError(f"{project.name}: uncommitted Mac changes; commit them before importing")
     head = git(project, "rev-parse", "HEAD").strip()
@@ -385,49 +525,137 @@ def import_project(settings, project, wanted, baseline, current, home):
             r = subprocess.run(["git", "-C", project, "config", "--get", key], capture_output=True, text=True)
             if r.returncode == 0:
                 git(clone, "config", key, r.stdout.strip())
-        md, ac = {}, []
-        for key, checked in changes.items():
+        md, ac, originals = {}, [], {}
+        for key in sorted(toggles.keys() | renames.keys()):
             task = current[key]
+            checked, title = toggles.get(key), renames.get(key)
             if key.startswith("adapter:"):
-                ac.append(dict(id=key[len("adapter:"):], checked=checked))
+                item = dict(id=key[len("adapter:"):], checked=task["checked"] if checked is None else checked)
+                if title is not None:
+                    item.update(title=title, expected_title=task["title"])
+                ac.append(item)
             else:
                 rel = task["path"]
                 if digest(safe(clone, rel).read_text().encode()) != task["source_hash"]:
                     raise ValueError("source changed while preparing task transaction")
-                lines = md.setdefault(rel, safe(clone, rel).read_text().splitlines(keepends=True))
-                m = CHECKBOX.match(lines[task["line"]].rstrip("\r\n"))
-                ending = "\n" if lines[task["line"]].endswith("\n") else ""
-                lines[task["line"]] = m[1] + ("x" if checked else " ") + m[3] + ending
+                original = originals.setdefault(rel, safe(clone, rel).read_bytes().decode())
+                lines = md.setdefault(rel, original.splitlines(keepends=True))
+                lines[task["line"]] = rewrite_task(lines[task["line"]], checked, title)
         for rel, lines in md.items():
-            safe(clone, rel).write_text("".join(lines))
+            renamed = {key: renames[key] for key in renames if current[key].get("path") == rel and not key.startswith("adapter:")}
+            before = markdown_tasks(originals[rel], rel)
+            after = markdown_tasks("".join(lines), rel)
+            ids = {t["id"] for t in before}
+            # A rename must replace exactly the renamed tasks and nothing else in the note.
+            if (len(after) != len(before) or ids - {t["id"] for t in after} != set(renamed)
+                    or sorted(t["title"] for t in after if t["id"] not in ids) != sorted(renamed.values())):
+                raise ValueError(f"{project.name}/{rel}: rename would change more than the requested tasks")
+            safe(clone, rel).write_bytes("".join(lines).encode())
         if ac:
             adapter(settings, clone, "apply", ac)
         config = dl.load_config(clone)
+        summary = ("Toggle and rename tasks" if toggles and renames else "Rename tasks" if renames else "Toggle tasks") + " via Obsidian iCloud bridge"
         for rel in git(clone, "diff", "--name-only", "-z").split("\0"):
             if rel.endswith(".md"):
                 p = safe(clone, rel)
-                text, errors, _ = dl.stamp_text(p.read_text(), p.name, config, "human", "Toggle tasks via Obsidian iCloud bridge")
+                raw = p.read_bytes().decode()
+                text, errors, _ = dl.stamp_text(raw.replace("\r\n", "\n"), p.name, config, "human", summary)
                 if errors:
                     raise ValueError("; ".join(errors))
-                p.write_text(text)
+                p.write_bytes((text.replace("\n", "\r\n") if "\r\n" in raw else text).encode())
         if ac:
             adapter(settings, clone, "validate")
-            actual = {t["id"]: t["checked"] for t in adapter(settings, clone, "list")}
-            if any(actual.get("adapter:" + t["id"]) != t["checked"] for t in ac):
-                raise ValueError("adapter did not apply requested checkbox states")
+            actual = {t["id"]: t for t in adapter(settings, clone, "list")}
+            for item in ac:
+                got = actual.get("adapter:" + item["id"])
+                if got is None or got["checked"] != item["checked"]:
+                    raise ValueError("adapter did not apply requested checkbox states")
+                if "title" in item and unicodedata.normalize("NFC", got["title"]).strip() != item["title"]:
+                    raise ValueError("adapter did not apply the requested title")
         run(["uv", "run", "--quiet", TOOLS / "docs_lint.py"], clone)
         git(clone, "add", "--all")
-        git(clone, "commit", "--quiet", "-m", "Update task completion from Obsidian", "-m",
-            f"Apply {len(changes)} user checkbox toggle(s) and regenerate authoritative views.\n\n"
-            "Checkbox state is user-reported; no factual verification was performed.\n"
-            "Validation: project adapter, Folderwise lint and Git hooks.\n\nBridge: folderwise-ibridge")
+        if renames:
+            subject = "Update tasks from Obsidian"
+            body = (f"Apply {len(toggles)} user checkbox toggle(s) and {len(renames)} user title edit(s) and regenerate authoritative views.\n\n"
+                    "Checkbox state and task titles are user-typed; no factual verification was performed.\n")
+        else:
+            subject = "Update task completion from Obsidian"
+            body = (f"Apply {len(toggles)} user checkbox toggle(s) and regenerate authoritative views.\n\n"
+                    "Checkbox state is user-reported; no factual verification was performed.\n")
+        git(clone, "commit", "--quiet", "-m", subject, "-m",
+            body + f"Validation: project adapter, Folderwise lint and Git hooks.\n\nBridge: folderwise-ibridge\n"
+            f"Bridge-Ops: toggle={len(toggles)} rename={len(renames)}")
         if git(project, "status", "--porcelain") or git(project, "rev-parse", "HEAD").strip() != head:
             raise ValueError(f"{project.name}: Mac repository changed during import; retry after review")
         git(project, "fetch", "--quiet", "--no-tags", str(clone), "HEAD")
         git(project, "merge", "--ff-only", "--quiet", "FETCH_HEAD")
+        return dict(commit=git(project, "rev-parse", "--short", "HEAD").strip(), toggled=len(toggles), renamed=len(renames))
     finally:
         if clone.exists():
             shutil.rmtree(clone)
+
+
+def stash_phone_text(home, key, path):
+    """Keep the exact rejected phone bytes outside iCloud before the generated view is restored."""
+    root = home / "rejected"
+    root.mkdir(exist_ok=True, mode=0o700)
+    folder = root / time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    folder.mkdir(exist_ok=True, mode=0o700)
+    data = path.read_bytes()
+    target = folder / key.replace("/", "__")
+    while target.exists():
+        target = target.with_name(target.name + "+")
+    atomic(target, data)
+    target.chmod(0o600)
+    if target.read_bytes() != data:
+        raise ValueError(f"{key}: could not save the phone text; nothing was overwritten")
+
+
+def prune_private(home, ledger):
+    """Forget saved phone text and ledger entries older than KEEP_DAYS."""
+    cutoff = time.time() - KEEP_DAYS * 86400
+    root = home / "rejected"
+    for folder in root.iterdir() if root.is_dir() else []:
+        if folder.stat().st_mtime < cutoff:
+            shutil.rmtree(folder, ignore_errors=True)
+    for kind in ledger:
+        ledger[kind] = [e for e in ledger[kind] if e["epoch"] >= cutoff]
+
+
+def ledger_add(ledger, kind, **entry):
+    entry.update(at=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()), epoch=time.time())
+    ledger[kind] = (ledger[kind] + [entry])[-KEEP_ENTRIES:]
+
+
+def conflict_copies(vault, keys):
+    """Unmanaged siblings iCloud may have created beside managed files (for example 'note 2.md')."""
+    folders = {}
+    for key in keys:
+        folders.setdefault(safe(vault, key).parent, []).append(safe(vault, key))
+    found = set()
+    for folder, managed in folders.items():
+        if not folder.is_dir():
+            continue
+        names = {p.name for p in folder.iterdir()}
+        for p in managed:
+            pattern = re.compile(re.escape(p.stem) + r" \d+" + re.escape(p.suffix))
+            for name in names - {p.name}:
+                rel = (folder / name).relative_to(vault).as_posix()
+                if rel not in keys and (pattern.fullmatch(name) or (name.startswith(p.stem) and "conflicted copy" in name)):
+                    found.add(rel)
+    return sorted(found)
+
+
+def deferrable(home, exc):
+    """True, and recorded, for a brief iCloud file lock; the third consecutive failure is reported."""
+    if not (isinstance(exc, OSError) and exc.errno in TRANSIENT):
+        return False
+    last = read_json(home / "last-run.json", {})
+    if last.get("deferred", 0) >= 2:
+        return False
+    last["deferred"] = last.get("deferred", 0) + 1
+    save(home / "last-run.json", last)
+    return True
 
 
 NOTIFIER_NAME = 'Folderwise iBridge.app'
@@ -517,7 +745,11 @@ def remove_notifier(home):
     manifest.unlink(missing_ok=True)
 
 
-def report(files, omissions, issues, settings, managed_bytes):
+def cell(value):
+    return str(value).replace("|", "&#124;").replace("\n", " ")
+
+
+def report(files, omissions, issues, settings, managed_bytes, ledger=None, copies=()):
     image_bytes = sum(content_size(data) for key, data in files.items() if Path(key).suffix.lower() in IMAGES)
     rows = ["# Folderwise sync status", "", f"Mode: **{settings['mode']}**. Interval: **{settings['interval_minutes']} minutes**.",
             f"Estimated managed export: **{sum(content_size(data) for data in files.values()):,} bytes**, including **{image_bytes:,} image bytes**.",
@@ -525,6 +757,18 @@ def report(files, omissions, issues, settings, managed_bytes):
             "This is a file-size estimate, not your iCloud account usage or bill.",
             f"Image limits: per file={settings['max_image_bytes']}; aggregate={settings['max_images_total_bytes']} bytes (None = unlimited).", "", "## Issues", ""]
     rows += ["- " + str(x).replace("\n", " ") for x in issues] or ["None."]
+    ledger = ledger or {}
+    if ledger.get("rejected"):
+        rows += ["", "## Phone edits not applied", "",
+                 "The text was saved on the Mac outside iCloud and the generated view was restored.", "",
+                 "| When | File | Reason |", "| --- | --- | --- |"]
+        rows += [f"| {e['at']} | {cell(e['file'])} | {cell(e['reason'])} |" for e in ledger["rejected"]]
+    if ledger.get("imports"):
+        rows += ["", "## Recent imports", "", "| When | Project | Commit | Toggled | Renamed |", "| --- | --- | --- | ---: | ---: |"]
+        rows += [f"| {e['at']} | {cell(e['project'])} | {e['commit']} | {e['toggled']} | {e['renamed']} |" for e in ledger["imports"]]
+    if copies:
+        rows += ["", "## iCloud conflict copies", "", "These files were not imported. Compare each with its original and delete the one you do not want.", ""]
+        rows += [f"- {cell(c)}" for c in copies]
     rows += ["", "## Omitted files", "", "| Path | Bytes | Reason |", "| --- | ---: | --- |"]
     rows += [f"| {x['path'].replace('|', '&#124;')} | {x['bytes']} | {x['reason']} |" for x in omissions]
     return ("\n".join(rows) + "\n").encode()
@@ -589,26 +833,53 @@ def sync(settings, home, dry=False):
     if not settings.get("enabled", True):
         raise ValueError("bridge is uninstalled or setup incomplete; run setup to enable it")
     vault = Path(settings['vault'])
-    issues = []
+    issues, notices = [], []
     files, tasks, omissions = {}, {}, []
+    ledger = read_json(home / 'ledger.json', {'imports': [], 'rejected': []})
+    accepted, restored = {}, set()
+
+    def reject(key, reason):
+        """Save the phone's text, then let the export restore the generated view."""
+        stash_phone_text(home, key, safe(vault, key))
+        restored.add(key)
+        accepted.pop(key, None)
+        notices.append(f'{key}: {reason}')
+        ledger_add(ledger, 'rejected', file=key, reason=reason)
+
     try:
         if not dry:
             recover_export(home, vault)
+            prune_private(home, ledger)
         state = read_json(home / 'state.json', {'files': {}, 'tasks': {}})
         files, tasks, omissions = inventory(settings)
         snapshot = {key: existing_hash(safe(vault, key)) for key in state['files'].keys() | files.keys()}
         if not dry:
-            pending = requests(vault, state)
+            pending, sources, accepted, rejected = requests(vault, state, rename_projects(settings))
+            for key, reason in rejected.items():
+                reject(key, reason)
             active = projects(settings)
             if pending.keys() - {p.name for p in active}:
                 raise ValueError('disabled project has pending phone edits; re-enable and import before disabling')
             for project in active:
                 if project.name in pending:
-                    import_project(settings, project, pending[project.name], state['tasks'].get(project.name, {}), tasks[project.name], home)
+                    try:
+                        done = import_project(settings, project, pending[project.name], state['tasks'].get(project.name, {}), tasks[project.name], home)
+                    except Rejected as exc:
+                        origin = sources.get(project.name, set())
+                        if not origin or not all(k.startswith(TASK_DIR + '/') for k in origin):
+                            raise
+                        for key in sorted(origin):
+                            reject(key, str(exc))
+                        continue
+                    if done:
+                        ledger_add(ledger, 'imports', project=project.name, **done)
             files, tasks, omissions = inventory(settings)
     except (ValueError, OSError) as exc:
         if dry:
             raise
+        if deferrable(home, exc):
+            print(f'Deferred: iCloud is busy with a file ({exc}); retrying on the next run.')
+            return 0
         issues.append(str(exc))
     total = sum(content_size(data) for data in files.values())
     print(f"Mode={settings['mode']}; selected {len(files)} files / {total:,} bytes; omitted {len(omissions)} files")
@@ -630,7 +901,8 @@ def sync(settings, home, dry=False):
                 before, after = existing_hash(target), content_hash(data)
                 if before != snapshot.get(key):
                     raise ValueError(f'{key}: vault changed during sync; preserved for next run')
-                if before is not None and before != after and (not old or before != old['hash']):
+                if (before is not None and before != after and (not old or before != old['hash'])
+                        and before != accepted.get(key) and key not in restored):
                     try:
                         task_changes(old['text'], target.read_text())
                     except (ValueError, KeyError, TypeError, UnicodeError):
@@ -655,13 +927,16 @@ def sync(settings, home, dry=False):
                     if before != snapshot.get(key) or before not in {None, old['hash']}:
                         raise ValueError(f'{key}: changed copy prevents cleanup; preserved')
                     removes[key] = before
-            save(home / 'export.json', dict(writes=writes, removes=removes, state={'files': next_files, 'tasks': tasks}))
+            save(home / 'export.json', dict(writes=writes, removes=removes, state={'files': next_files, 'tasks': tasks, 'schema': 2}))
             recover_export(home, vault)
         except (ValueError, OSError) as exc:
+            if deferrable(home, exc):
+                print(f'Deferred: iCloud is busy with a file ({exc}); retrying on the next run.')
+                return 0
             issues.append(str(exc))
     managed_bytes = 0
-    accepted = read_json(home / 'state.json', {'files': {}})
-    for key in accepted['files']:
+    accepted_state = read_json(home / 'state.json', {'files': {}})
+    for key in accepted_state['files']:
         try:
             p = safe(vault, key)
             if p.is_file():
@@ -675,7 +950,8 @@ def sync(settings, home, dry=False):
                     and legacy_before == previous_report.get('hash'))
     if legacy_before is not None and not legacy_owned:
         issues.append(f'{LEGACY_REPORT}: legacy report has unowned edits; preserved. Move it outside the vault after review.')
-    status = report(files, omissions, issues, settings, managed_bytes)
+    copies = conflict_copies(vault, set(accepted_state['files']) | set(files)) if not issues else []
+    status = report(files, omissions, issues, settings, managed_bytes, ledger, copies)
     target = safe(vault, REPORT)
     if target.exists() and content_hash(target) not in {previous_report.get('hash'), digest(status)}:
         raise ValueError(f'{REPORT} has unowned edits; preserve/rename it before retrying')
@@ -686,19 +962,22 @@ def sync(settings, home, dry=False):
             raise ValueError(f'{LEGACY_REPORT}: changed during migration; preserved')
         legacy.unlink()
     save(home / 'report.json', {'path': REPORT, 'hash': digest(status)})
-    last = {'issues': issues, 'omitted_files': len(omissions), 'selected_bytes': total, 'managed_bytes': managed_bytes,
+    last = {'issues': issues, 'notices': notices, 'omitted_files': len(omissions), 'selected_bytes': total, 'managed_bytes': managed_bytes,
             'last_run': dl.now({'timezone': 'UTC'}).isoformat(), 'last_run_epoch': time.time(), 'ok': not issues}
     previous = read_json(home / 'last-run.json', {})
     actionable = [item for item in omissions if item['reason'] != 'excluded by lean mode']
-    signature = digest(json.dumps([issues, actionable], sort_keys=True).encode())
-    if settings['notifications'] == 'errors' and (issues or actionable) and previous.get('issue_signature') != signature:
+    signature = digest(json.dumps([issues, notices, actionable], sort_keys=True).encode())
+    if settings['notifications'] == 'errors' and (issues or actionable or notices) and previous.get('issue_signature') != signature:
         last['notification_sent'] = notify('Folderwise bridge needs attention. See _folderwise-sync-status.md in your vault.', home)
     last['issue_signature'] = signature
+    save(home / 'ledger.json', ledger)
     save(home / 'last-run.json', last)
     with (home / 'bridge.log').open('a') as log:
         log.write(json.dumps(last) + '\n')
     if (home / 'bridge.log').stat().st_size > 1_000_000:
         (home / 'bridge.log').replace(home / 'bridge.previous.log')
+    for notice in notices:
+        print('NOTICE ' + notice)
     for issue in issues:
         print('ERROR ' + issue)
     return 1 if issues else 0

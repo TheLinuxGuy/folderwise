@@ -2,7 +2,7 @@
 
 The optional **folderwise-ibridge** keeps your project repositories on your Mac and exports a separate Obsidian vault into iCloud. Read your documents and complete tasks from one dashboard on iPhone. One Mac imports checkbox changes, updates authoritative records, regenerates views, stamps documents, validates them, and creates local Git commits in each project.
 
-The bridge is deliberately simple: checking means complete; unchecking means incomplete. It does **not** interpret a task, confirm evidence, or establish that the described action happened. Task changes do not advance `last_verified`. Project adapters must implement this same boolean behavior without fabricating evidence.
+The bridge is deliberately simple: checking means complete; unchecking means incomplete. It does **not** interpret a task, confirm evidence, or establish that the described action happened. Task changes do not advance `last_verified`. Project adapters must implement this same boolean behavior without fabricating evidence. A project can additionally accept task **renames** from the phone; see [Rename tasks from iPhone](#rename-tasks-from-iphone-opt-in).
 
 ## Layout and prerequisites
 
@@ -75,11 +75,39 @@ On each scheduled or manual `sync`, the bridge:
 
 To refresh immediately, run `uv run _tools/icloud_bridge.py sync` on the Mac. The scheduled job performs the same operation at your configured interval.
 
-**Toggle checkboxes; do not edit titles, add tasks, reorder lines, or rename these files or their folder.** Only checkbox on/off changes are imported. Unsupported edits and conflicts are preserved and reported in `_folderwise-sync-status.md`; the bridge does not overwrite them with a regenerated view. Missing generated files are restored from Mac data on the next sync. Task identity and ownership mappings live in the bridge’s local state outside iCloud; the generated Markdown is an interactive view, not the authoritative task store.
+**Toggle checkboxes; do not add tasks, reorder lines, or rename these files or their folder.** By default only checkbox on/off changes are imported; title edits need the per-project opt-in below. If you make any other edit to a generated task view, the bridge saves your exact text on the Mac (outside iCloud, kept 30 days), restores the view from Mac data on the next sync, lists the edit under **Phone edits not applied** in `_folderwise-sync-status.md`, and sends one notification. Unsupported edits to a copied source note are different: they stay in the vault and freeze export so they cannot be overwritten (see [Conflicts and recovery](#conflicts-and-recovery)). Missing generated files are restored from Mac data on the next sync. Task identity and ownership mappings live in the bridge’s local state outside iCloud; the generated Markdown is an interactive view, not the authoritative task store.
 
 Configure Tasks for simple toggles: disable automatic done/created/cancelled dates, leave its global filter empty, use ordinary space/x statuses, and avoid recurring tasks or on-completion deletion. Those features modify more than a checkbox and are outside this bridge's contract. A plugin-added date is preserved and reported as an unsupported edit, rather than silently discarded. Dataview is optional for property tables; [Dataview TASK](https://blacksmithgu.github.io/obsidian-dataview/queries/query-types/#task) can also toggle a checkbox, provided completion metadata insertion is disabled.
 
-Handwritten task checkboxes can also be toggled in the copied source document. Generated checkboxes must be toggled through their mapped dashboard projection. Text edits, new documents, renames, deletions, custom task statuses and capture inboxes are not imported in this release. Missing exported files are restored from Mac; phone deletions never delete a source file. Unmanaged files are left alone.
+Handwritten task checkboxes can also be toggled in the copied source document. Generated checkboxes must be toggled through their mapped dashboard projection. Text edits to notes, new documents, deletions, custom task statuses and capture inboxes are not imported in this release; the only title changes accepted are the opt-in renames below. Missing exported files are restored from Mac; phone deletions never delete a source file. Unmanaged files are left alone.
+
+### Rename tasks from iPhone (opt-in)
+
+Renaming is off by default. To allow it for a project, add this to its `.docs.yaml` and commit it:
+
+```yaml
+folderwise-ibridgerename: true
+```
+
+The value must be a boolean. After the next sync the project's generated view says that title edits are imported. Then, on iPhone:
+
+1. Open `_Folderwise Tasks/<project>.md` and edit the task text, or use the Tasks plugin's edit dialog on `Tasks.md` and change the description. Keep the checkbox and keep the `([source](…))` link at the end of the line. A due date, tag or other text the dialog adds after the link is rejected.
+2. At the next scheduled run the Mac validates the edit, applies it in an isolated clone, stamps the changed note as `human`, lints and commits locally. The commit message records counts and `Bridge-Ops: toggle=N rename=M`, never the titles, and states that titles are user-typed and unverified. The Change Log row says "Rename tasks via Obsidian iCloud bridge". `last_verified` is not advanced.
+3. The regenerated view shows the new title and the status report lists the import under **Recent imports**. You can rename and toggle the same task in one save; both are applied in one commit.
+
+A rename is accepted only when all of these hold. Otherwise the whole save of that view is rejected: the text is saved on the Mac, the view is restored, and the reason is listed in the status report.
+
+| Rule | Why |
+| --- | --- |
+| One line, 1–200 characters, no control or text-direction characters | Keeps the note and its generated blocks intact |
+| No `<!--`, no `-->`, no `([source](`, no leading `[ ]`, and no leading `=`, `+`, `-` or `@` | Prevents forged markers, nested lists and spreadsheet formulas |
+| No links or images in the new title, and the task's current title must not contain any | The view shows links as plain text, so renaming it would silently drop them; edit those tasks on the Mac |
+| The new title may not equal another task's title in the same view | Stops swapped or reordered lines from being read as renames |
+| Tasks that share a title with another task cannot be renamed | Their identity depends on position |
+| The task must be unchanged on the Mac since the last export | A rename never overwrites a Mac-side change |
+| Adapter tasks must advertise `editable: ["title"]` | Only the project's adapter knows how to rewrite its records |
+
+Task renames made inside the copied source notes are not accepted; keep using the dashboard views.
 
 ## Authoritative CSVs and project adapters
 
@@ -99,8 +127,8 @@ This is an excerpt, not a replacement for the complete generated config. Adapter
 
 | Operation | Contract |
 | --- | --- |
-| `list` | Print a JSON array of `{id, title, path, checked}` objects; IDs are unique and stable, `checked` is boolean, `path` is an existing project-relative document. Include completed records. |
-| `apply` | Read a JSON array of `{id, checked}` requests on stdin; update authoritative sources and regenerate every affected view. Preserve unrelated records. |
+| `list` | Print a JSON array of `{id, title, path, checked}` objects; IDs are unique and stable, `checked` is boolean, `path` is an existing project-relative document. Include completed records. A task may add `editable: ["title"]` to allow phone renames when the project has `folderwise-ibridgerename: true`. |
+| `apply` | Read a JSON array of `{id, checked}` requests on stdin; update authoritative sources and regenerate every affected view. Preserve unrelated records. `checked` is always present. A rename also carries `title` and `expected_title`: compare `expected_title` with the record and fail if it changed. After `apply`, the bridge re-lists and requires the requested `checked` and `title` values. |
 | `validate` | Exit zero only when authoritative data and regenerated views agree. No task-semantic or evidence approval gate. |
 
 [Example CSV adapter](examples/ibridge_csv_adapter.py) demonstrates an open/complete CSV and a generated backlog that hides completed tasks. Copy it into a fictional project first, adapt its schema and renderer, and commit it with the project. Its unchecked state is explicitly `open`; map richer statuses such as blocked/cancelled deliberately. An adapter task must live in a generated block rather than also appearing as a handwritten task, to avoid two independent identities for the same record.
@@ -166,7 +194,7 @@ Limits apply to individual images and all selected images across enabled project
 
 ### Bridge status report
 
-The generated `_folderwise-sync-status.md` lives at the root of your iCloud vault. It lists sync issues and gives you details to investigate a notification. On upgrade, the bridge replaces an unchanged, bridge-owned `Bridge Status.md` with this name. An already-renamed, unchanged report is recognized too. Edited or unowned legacy reports are preserved and flagged in the new report; review and move them outside the vault to clear the warning. An existing edited destination is never overwritten.
+The generated `_folderwise-sync-status.md` lives at the root of your iCloud vault. It lists sync issues and gives you details to investigate a notification. After a phone edit is imported or rejected it also shows up to ten recent entries, each kept 30 days: **Phone edits not applied** (when, file, reason, with line numbers; the exact text is saved on the Mac), **Recent imports** (when, project, local commit, toggles and renames), and **iCloud conflict copies** (files such as `note 2.md` created beside a managed file; they are reported and never imported, so compare each with its original and delete the one you do not want). The sections appear only when there is something to show. On upgrade, the bridge replaces an unchanged, bridge-owned `Bridge Status.md` with this name. An already-renamed, unchanged report is recognized too. Edited or unowned legacy reports are preserved and flagged in the new report; review and move them outside the vault to clear the warning. An existing edited destination is never overwritten.
 
 `_folderwise-sync-status.md` lists omitted files, sizes and reasons, including configured-limit omissions and missing/untracked referenced images. It reports selected export bytes, selected image bytes, and currently present managed payload bytes, **not** account free space or an iCloud bill. Current payload size excludes generated status/settings and unowned files, and can exceed the new selection when a conflict prevents cleanup. Obsidian plugins, unrelated vault files, iCloud retention and other account data can consume additional storage. Lowering limits removes only unchanged bridge-owned copies; modified phone files are preserved and reported. The report only changes when its meaningful content changes.
 
@@ -222,7 +250,7 @@ uv run _tools/icloud_bridge.py schedule-disable
 
 The user must remain logged in. Background helpers may need one-time macOS file-access consent for protected folders such as Documents. For fictional testing, a source/state folder under your home directory avoids needing broad Documents-folder access; keep the separate mobile vault in iCloud. Sleep can skip interval firings; periodic runs resume after wake. The job does not overlap itself. Only one scheduled bridge installation per macOS user is supported. Re-running `schedule-enable` reloads the owned job; it refuses to replace another configuration's job. Disabling preserves vault content and local state.
 
-Folderwise builds a small notification app locally using macOS’s built-in `osacompile` and `codesign` tools. Setup confirmations, error summaries, and `notify-test` use the same Folderwise name and logo. The icon crops transparent padding from our original artwork and includes sizes for standard and Retina displays. No additional package or developer account is required. The generated app lives beside the bridge configuration, outside iCloud; uninstall removes it when unchanged and preserves customizations. Notifications are best effort. New conflicts, failed imports and image-budget omissions produce a summary; routine success and unchanged issues stay quiet. Intentional lean exclusions do not generate alerts. Banners contain no document/task content. Focus or notification permissions can suppress them; a successful app launch does not prove a banner appeared. See [Apple's notification scripting guide](https://developer.apple.com/library/archive/documentation/LanguagesUtilities/Conceptual/MacAutomationScriptingGuide/DisplayNotifications.html). macOS controls the icon on its own App Background Activity notice (the System Settings gear); Folderwise cannot replace it. Custom action buttons are outside this release. Allow notifications for **Folderwise iBridge** if macOS asks on first use.
+Folderwise builds a small notification app locally using macOS’s built-in `osacompile` and `codesign` tools. Setup confirmations, error summaries, and `notify-test` use the same Folderwise name and logo. The icon crops transparent padding from our original artwork and includes sizes for standard and Retina displays. No additional package or developer account is required. The generated app lives beside the bridge configuration, outside iCloud; uninstall removes it when unchanged and preserves customizations. Notifications are best effort. New conflicts, failed imports, rejected phone edits and image-budget omissions produce a summary; routine success and unchanged issues stay quiet. Intentional lean exclusions do not generate alerts. Banners contain no document/task content. Focus or notification permissions can suppress them; a successful app launch does not prove a banner appeared. See [Apple's notification scripting guide](https://developer.apple.com/library/archive/documentation/LanguagesUtilities/Conceptual/MacAutomationScriptingGuide/DisplayNotifications.html). macOS controls the icon on its own App Background Activity notice (the System Settings gear); Folderwise cannot replace it. Custom action buttons are outside this release. Allow notifications for **Folderwise iBridge** if macOS asks on first use.
 
 ```sh
 uv run _tools/icloud_bridge.py configure --notifications off
@@ -249,7 +277,9 @@ Use the same `--config /absolute/path/config.json` argument as your installed br
 
 ## Conflicts and recovery
 
-Phone imports are evaluated against the last accepted baseline, not modification timestamps. Unsupported or conflicting edits freeze export so they cannot be overwritten. Read `_folderwise-sync-status.md` and local logs; preserve the edited vault file outside managed paths, resolve the corresponding source on Mac, then restore the exported file to its previous baseline or apply only the intended checkbox change. Do not erase bridge state to make a conflict disappear.
+Phone imports are evaluated against the last accepted baseline, not modification timestamps. A rejected edit to a **generated task view** is saved to the bridge state's `rejected/` folder (private to your user, outside iCloud, kept 30 days), the view is restored, the edit is listed in the status report, and other projects keep syncing. A pending edit that conflicts with a Mac-side change (for example a toggle or rename of a task that was renamed on the Mac) is handled the same way. Unsupported or conflicting edits to a **copied source note**, and failures such as a dirty project or a failed hook, freeze export so they cannot be overwritten; the error names the file and line.
+
+If iCloud briefly locks a file while it syncs (for example "Resource deadlock avoided"), the run is deferred and retried quietly; only the third consecutive failure is reported. After a freeze: read `_folderwise-sync-status.md` and local logs; preserve the edited vault file outside managed paths, resolve the corresponding source on Mac, then restore the exported file to its previous baseline or apply only the intended checkbox change. Do not erase bridge state to make a conflict disappear.
 
 Export uses a local journal (`export.json`) so interrupted copies can finish on a later run. Replay proceeds only when each destination still matches the old or intended bytes and each source payload remains unchanged. If either side changed, it stops and preserves the files. Keep independent backups of your source repositories.
 
