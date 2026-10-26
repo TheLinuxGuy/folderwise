@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
+import difflib
 import errno
 import fcntl
 import hashlib
@@ -46,6 +48,12 @@ CHECKBOX = re.compile(r"^(\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\].*)$")
 SOURCE_TAIL = " ([source]("
 MAX_TITLE = 200
 KEEP_DAYS, KEEP_ENTRIES = 30, 10
+# Phone edits to copied notes (opt-in): size limits and the generated regions that stay Mac-owned.
+EDIT_MAX_BYTES, EDIT_MAX_LINES, EDIT_MAX_CHANGED, EDIT_SHRINK = 256 * 1024, 5000, 200, 0.5
+EDIT_SETTLE_SECONDS = 120
+GENERATED = re.compile(r'<!--\s*([\w-]+):start\b[^>]*-->.*?<!--\s*\1:end\s*-->', re.S)
+MARKER = re.compile(r'<!--\s*[\w-]+:(?:start|end)\b')
+FRONT = re.compile(r'\A---\n.*?\n---\n', re.S)
 # iCloud can briefly lock a file it is syncing; these are retried, not reported.
 TRANSIENT = {errno.EDEADLK, errno.EAGAIN, errno.EBUSY, errno.ETIMEDOUT}
 DEFAULT_HOME = Path.home() / ("Library/Application Support/Folderwise/ibridge" if sys.platform == "darwin" else ".local/state/folderwise-ibridge")
@@ -57,7 +65,8 @@ def run(argv, cwd=None, data=None):
     except subprocess.TimeoutExpired:
         raise ValueError(f"{Path(str(argv[0])).name} timed out; pending changes are preserved") from None
     if result.returncode:
-        raise ValueError(f"{Path(str(argv[0])).name} failed: {(result.stderr or result.stdout).strip()[-1200:]}")
+        detail = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
+        raise ValueError(f"{Path(str(argv[0])).name} failed: {detail[-1200:]}")
     return result.stdout
 
 
@@ -133,6 +142,11 @@ def validate_settings(settings, path):
             raise ValueError(f"{name}: use a positive interval/nonnegative byte limit; null means unlimited")
     if settings["interval_minutes"] is None:
         raise ValueError("interval_minutes cannot be null")
+    if type(settings.get("text_edits", False)) is not bool:
+        raise ValueError("text_edits must be boolean")
+    settle = settings.get("edit_settle_seconds", EDIT_SETTLE_SECONDS)
+    if type(settle) is not int or settle < 0:
+        raise ValueError("edit_settle_seconds must be a nonnegative integer")
     state = path.parent.resolve()
     if state == vault or vault in state.parents or state == source or source in state.parents:
         raise ValueError("bridge config/state must be outside source and vault")
@@ -166,6 +180,9 @@ def projects(settings, include_disabled=False):
             raise ValueError(f"{p.name}: folderwise-ibridgesync must be boolean")
         if type(cfg.get("folderwise-ibridgerename", False)) is not bool:
             raise ValueError(f"{p.name}: folderwise-ibridgerename must be boolean")
+        patterns = cfg.get("folderwise-ibridgeedit", [])
+        if not isinstance(patterns, list) or not all(isinstance(s, str) and s and not s.startswith("/") and ".." not in s.split("/") for s in patterns):
+            raise ValueError(f"{p.name}: folderwise-ibridgeedit must be a list of project-relative path patterns")
         if enabled or include_disabled:
             if Path(git(p, "rev-parse", "--show-toplevel").strip()).resolve() != p.resolve():
                 raise ValueError(f"{p.name}: expected an independent Git repository")
@@ -188,6 +205,38 @@ def owner(key):
 def rename_projects(settings):
     """Names of enabled projects whose phone title edits are allowed (opt-in, default off)."""
     return {p.name for p in projects(settings) if dl.load_config(p).get("folderwise-ibridgerename", False)}
+
+
+def glob_match(rel, pattern):
+    """Project-relative match: `*` stays inside a folder, `**` crosses folders, `?` is one character."""
+    regex, i = "", 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            regex, i = regex + "(?:.*/)?", i + 3
+        elif pattern.startswith("**", i):
+            regex, i = regex + ".*", i + 2
+        elif pattern[i] in "*?":
+            regex, i = regex + ("[^/]*" if pattern[i] == "*" else "[^/]"), i + 1
+        else:
+            regex, i = regex + re.escape(pattern[i]), i + 1
+    return re.fullmatch(regex, rel) is not None
+
+
+def edit_projects(settings):
+    """Project name -> path patterns whose copied notes accept phone text edits (opt-in twice, default off)."""
+    if not settings.get("text_edits", False):
+        return {}
+    found = {}
+    for p in projects(settings):
+        patterns = dl.load_config(p).get("folderwise-ibridgeedit", [])
+        if patterns:
+            found[p.name] = patterns
+    return found
+
+
+def editable(editors, key):
+    name, _, rel = key.partition("/")
+    return key.lower().endswith(".md") and any(glob_match(rel, g) for g in editors.get(name, []))
 
 
 def tracked(project):
@@ -456,11 +505,58 @@ def merge_edits(target, staged):
     return merged
 
 
-def requests(vault, state, renames=frozenset(), failures=None):
-    """Collect phone edits: (wanted per project, files each project's edits came from,
-    vault hashes accepted as valid, generated views rejected with the reason).
+def changed_lines(before, after):
+    """How many lines differ between two lists of lines."""
+    ops = difflib.SequenceMatcher(None, before, after, autojunk=False).get_opcodes()
+    return sum(max(i2 - i1, j2 - j1) for tag, i1, i2, j1, j2 in ops if tag != "equal")
+
+
+def note_edit(base, phone):
+    """Validate a phone edit of a copied note against the last export; return the text to commit or raise Rejected."""
+    if len(phone.encode()) > EDIT_MAX_BYTES or "\0" in phone:
+        raise Rejected(f"a note edited on the phone must be text under {EDIT_MAX_BYTES // 1024} KB")
+    before, after = base.splitlines(), phone.splitlines()
+    if not phone.strip() or len(after) > EDIT_MAX_LINES or len(after) < len(before) * (1 - EDIT_SHRINK):
+        raise Rejected("the edit empties the note, removes more than half of it, or makes it too long")
+    front_base, front_phone = FRONT.match(base), FRONT.match(phone)
+    if bool(front_base) != bool(front_phone):
+        raise Rejected("front matter cannot be added or removed from the phone")
+    if front_base:
+        try:
+            same = yaml.safe_load(front_base[0].split("---\n", 2)[1]) == yaml.safe_load(front_phone[0].split("---\n", 2)[1])
+        except yaml.YAMLError:
+            same = False
+        if not same:
+            raise Rejected("front matter cannot be edited from the phone (the Mac stamps it)")
+    body_base = base[len(front_base[0]):] if front_base else base
+    body_phone = phone[len(front_phone[0]):] if front_phone else phone
+    if [m[0] for m in GENERATED.finditer(body_base)] != [m[0] for m in GENERATED.finditer(body_phone)]:
+        raise Rejected("generated blocks (byline, change log, tables, tasks) cannot be edited from the phone")
+    if MARKER.search(GENERATED.sub("", body_phone)):
+        raise Rejected("generated-block markers cannot be added or changed from the phone")
+    # A copy saved from an older export differs in the Mac-stamped change log, so the block check above already refuses it.
+    changed = changed_lines(before, after)
+    if changed > EDIT_MAX_CHANGED:
+        raise Rejected(f"the edit changes more than {EDIT_MAX_CHANGED} lines; split it into smaller edits")
+    return (front_base[0] + body_phone) if front_base else phone
+
+
+def settled(quiet, key, fingerprint):
+    """True once the phone text has stayed identical for the quiet period across runs."""
+    seen = quiet["pending"].get(key)
+    quiet["keep"].add(key)
+    if not seen or seen["hash"] != fingerprint:
+        quiet["pending"][key] = dict(hash=fingerprint, since=quiet["now"])
+        return False
+    return quiet["now"] - seen["since"] >= quiet["settle"]
+
+
+def requests(vault, state, renames=frozenset(), failures=None, editors=None, quiet=None):
+    """Collect phone edits: (task edits per project, files each project's edits came from, vault hashes
+    accepted as valid, generated views rejected with the reason, note text edits per project, notes
+    still waiting out the quiet period).
     A bad edit to a copied note is recorded in `failures` for its project when a dict is given."""
-    wanted, sources, accepted, rejected = {}, {}, {}, {}
+    wanted, sources, accepted, rejected, edits, waiting = {}, {}, {}, {}, {}, set()
     for key, entry in state.get("files", {}).items():
         p = safe(vault, key)
         if not p.is_file() or "text" not in entry:
@@ -471,25 +567,35 @@ def requests(vault, state, renames=frozenset(), failures=None):
         project = entry.get("project")
         view = key.startswith(TASK_DIR + "/")
         try:
-            delta = view_changes(entry["text"], data, project in renames) if view else task_changes(entry["text"], data)
-            mapping = {t["line"]: t for t in entry.get("tasks", [])}
-            staged = {}
-            for line, change in delta.items():
-                if line not in mapping:
-                    raise Rejected("checkbox has no authoritative task mapping")
-                staged[mapping[line]["id"]] = change
-            wanted[project] = merge_edits(wanted.get(project, {}), staged)
+            try:
+                delta = view_changes(entry["text"], data, project in renames) if view else task_changes(entry["text"], data)
+            except Rejected:
+                if view or not editors or not editable(editors, key):
+                    raise
+                text = note_edit(entry["text"], data)
+                if quiet is not None and not settled(quiet, key, content_hash(p)):
+                    waiting.add(key)
+                    continue
+                edits.setdefault(project, {})[key.split("/", 1)[1]] = text
+            else:
+                mapping = {t["line"]: t for t in entry.get("tasks", [])}
+                staged = {}
+                for line, change in delta.items():
+                    if line not in mapping:
+                        raise Rejected("checkbox has no authoritative task mapping")
+                    staged[mapping[line]["id"]] = change
+                wanted[project] = merge_edits(wanted.get(project, {}), staged)
         except Rejected as exc:
             if view:
                 rejected[key] = str(exc)
-            elif failures is None:
+            elif failures is None or project is None:
                 raise ValueError(f"{key}: {exc}") from None
             else:
                 failures.setdefault(project, f"{key}: {exc}")
             continue
         sources.setdefault(project, set()).add(key)
         accepted[key] = content_hash(p)
-    return wanted, sources, accepted, rejected
+    return wanted, sources, accepted, rejected, edits, waiting
 
 
 def rewrite_task(line, checked, title):
@@ -531,10 +637,15 @@ def plan_import(name, wanted, baseline, current):
     return toggles, renames
 
 
-def import_project(settings, project, wanted, baseline, current, home):
+def import_project(settings, project, wanted, baseline, current, home, edits=None):
+    edits = edits or {}
     toggles, renames = plan_import(project.name, wanted, baseline, current)
-    if not toggles and not renames:
+    if not toggles and not renames and not edits:
         return None
+    touched = {current[key]["path"] for key in toggles.keys() | renames.keys() if not key.startswith("adapter:")}
+    if touched & edits.keys():
+        raise ValueError(f"{project.name}: a note was edited on the phone and one of its tasks was changed in the same run; "
+                         "resolve one of them first")
     if git(project, "status", "--porcelain"):
         raise ValueError(f"{project.name}: uncommitted Mac changes; commit them before importing")
     head = git(project, "rev-parse", "HEAD").strip()
@@ -585,10 +696,16 @@ def import_project(settings, project, wanted, baseline, current, home):
                     or sorted(t["title"] for t in after if t["id"] not in ids) != sorted(renamed.values())):
                 raise ValueError(f"{project.name}/{rel}: rename would change more than the requested tasks")
             safe(clone, rel).write_bytes("".join(lines).encode())
+        for rel, text in sorted(edits.items()):
+            raw = safe(clone, rel).read_bytes().decode()
+            safe(clone, rel).write_bytes((text.replace("\n", "\r\n") if "\r\n" in raw else text).encode())
         if ac:
             adapter(settings, clone, "apply", ac)
         config = dl.load_config(clone)
-        summary = ("Toggle and rename tasks" if toggles and renames else "Rename tasks" if renames else "Toggle tasks") + " via Obsidian iCloud bridge"
+        parts = ["Toggle and rename tasks" if toggles and renames else "Rename tasks" if renames else "Toggle tasks"] if toggles or renames else []
+        if edits:
+            parts.append("edit notes" if parts else "Edit notes")
+        summary = " and ".join(parts) + " via Obsidian iCloud bridge"
         for rel in git(clone, "diff", "--name-only", "-z").split("\0"):
             if rel.endswith(".md"):
                 p = safe(clone, rel)
@@ -608,7 +725,12 @@ def import_project(settings, project, wanted, baseline, current, home):
                     raise ValueError("adapter did not apply the requested title")
         run(["uv", "run", "--quiet", TOOLS / "docs_lint.py"], clone)
         git(clone, "add", "--all")
-        if renames:
+        if edits:
+            subject = "Update tasks and notes from Obsidian" if toggles or renames else "Update notes from Obsidian"
+            body = (f"Apply {len(toggles)} user checkbox toggle(s), {len(renames)} user title edit(s) and {len(edits)} user note edit(s) "
+                    "and regenerate authoritative views.\n\nCheckbox state, task titles and note text are user-typed; "
+                    "no factual verification was performed.\n")
+        elif renames:
             subject = "Update tasks from Obsidian"
             body = (f"Apply {len(toggles)} user checkbox toggle(s) and {len(renames)} user title edit(s) and regenerate authoritative views.\n\n"
                     "Checkbox state and task titles are user-typed; no factual verification was performed.\n")
@@ -618,12 +740,12 @@ def import_project(settings, project, wanted, baseline, current, home):
                     "Checkbox state is user-reported; no factual verification was performed.\n")
         git(clone, "commit", "--quiet", "-m", subject, "-m",
             body + f"Validation: project adapter, Folderwise lint and Git hooks.\n\nBridge: folderwise-ibridge\n"
-            f"Bridge-Ops: toggle={len(toggles)} rename={len(renames)}")
+            f"Bridge-Ops: toggle={len(toggles)} rename={len(renames)}" + (f" text-edit={len(edits)}" if edits else ""))
         if git(project, "status", "--porcelain") or git(project, "rev-parse", "HEAD").strip() != head:
             raise ValueError(f"{project.name}: Mac repository changed during import; retry after review")
         git(project, "fetch", "--quiet", "--no-tags", str(clone), "HEAD")
         git(project, "merge", "--ff-only", "--quiet", "FETCH_HEAD")
-        return dict(commit=git(project, "rev-parse", "--short", "HEAD").strip(), toggled=len(toggles), renamed=len(renames))
+        return dict(commit=git(project, "rev-parse", "--short", "HEAD").strip(), toggled=len(toggles), renamed=len(renames), edited=len(edits))
     finally:
         if clone.exists():
             shutil.rmtree(clone)
@@ -803,7 +925,7 @@ def cell(value):
     return str(value).replace("|", "&#124;").replace("\n", " ")
 
 
-def report(files, omissions, issues, settings, managed_bytes, ledger=None, copies=(), paused=()):
+def report(files, omissions, issues, settings, managed_bytes, ledger=None, copies=(), paused=(), waiting=()):
     image_bytes = sum(content_size(data) for key, data in files.items() if Path(key).suffix.lower() in IMAGES)
     rows = ["# Folderwise sync status", "", f"Mode: **{settings['mode']}**. Interval: **{settings['interval_minutes']} minutes**.",
             f"Estimated managed export: **{sum(content_size(data) for data in files.values()):,} bytes**, including **{image_bytes:,} image bytes**.",
@@ -819,9 +941,12 @@ def report(files, omissions, issues, settings, managed_bytes, ledger=None, copie
                  "The text was saved on the Mac outside iCloud and the generated view was restored.", "",
                  "| When | File | Reason |", "| --- | --- | --- |"]
         rows += [f"| {e['at']} | {cell(e['file'])} | {cell(e['reason'])} |" for e in ledger["rejected"]]
+    if waiting:
+        rows += ["", "## Phone edits waiting", "", "These notes are imported once their text has stayed unchanged for the quiet period.", ""]
+        rows += [f"- {cell(w)}" for w in waiting]
     if ledger.get("imports"):
-        rows += ["", "## Recent imports", "", "| When | Project | Commit | Toggled | Renamed |", "| --- | --- | --- | ---: | ---: |"]
-        rows += [f"| {e['at']} | {cell(e['project'])} | {e['commit']} | {e['toggled']} | {e['renamed']} |" for e in ledger["imports"]]
+        rows += ["", "## Recent imports", "", "| When | Project | Commit | Toggled | Renamed | Edited |", "| --- | --- | --- | ---: | ---: | ---: |"]
+        rows += [f"| {e['at']} | {cell(e['project'])} | {e['commit']} | {e['toggled']} | {e['renamed']} | {e.get('edited', 0)} |" for e in ledger["imports"]]
     if copies:
         rows += ["", "## iCloud conflict copies", "", "These files were not imported. Compare each with its original and delete the one you do not want.", ""]
         rows += [f"- {cell(c)}" for c in copies]
@@ -892,7 +1017,10 @@ def sync(settings, home, dry=False):
     issues, notices, held, run_imports, preview = [], [], {}, [], []
     files, tasks, omissions = {}, {}, []
     ledger = read_json(home / 'ledger.json', {'imports': [], 'rejected': []})
-    accepted, restored = {}, set()
+    accepted, restored, edits, waiting = {}, set(), {}, set()
+    editors = {}
+    quiet = dict(pending=copy.deepcopy(read_json(home / 'pending.json', {})), now=time.time(), keep=set(),
+                 settle=settings.get('edit_settle_seconds', EDIT_SETTLE_SECONDS))
 
     def reject(key, reason):
         """Save the phone's text, then let the export restore the generated view."""
@@ -909,12 +1037,25 @@ def sync(settings, home, dry=False):
         state = read_json(home / 'state.json', {'files': {}, 'tasks': {}})
         files, tasks, omissions = inventory(settings, failed=None if dry else held)
         snapshot = {key: existing_hash(safe(vault, key)) for key in state['files'].keys() | files.keys()}
-        pending, sources, accepted, rejected = requests(vault, state, rename_projects(settings), held)
+        editors = edit_projects(settings)
+        pending, sources, accepted, rejected, edits, waiting = requests(vault, state, rename_projects(settings), held, editors, quiet)
+        for name in list(edits):
+            for rel in edits[name]:
+                key = name + '/' + rel
+                if existing_hash(safe(Path(settings['source']), key)) != state['files'][key]['hash']:
+                    held[name] = (f'{key}: changed on the Mac after it was exported and was also edited on the phone; '
+                                  'keep the Mac version with resolve, or merge the two by hand on the Mac')
+            if name in held:
+                del edits[name]
         if dry:
             for key, reason in rejected.items():
                 preview.append(f'PHONE EDIT REJECTED {key}: {reason}; the text would be saved and the view restored')
             for name, reason in held.items():
                 preview.append(f'PHONE EDIT BLOCKED {name}: {reason}')
+            for name, notes in sorted(edits.items()):
+                preview.append(f"PHONE EDIT {name}: would apply text edits to {len(notes)} note(s): {', '.join(sorted(notes))}")
+            for key in sorted(waiting):
+                preview.append(f"PHONE EDIT WAITING {key}: the phone text must stay unchanged for {quiet['settle']} seconds across two runs")
             for name, wanted in sorted(pending.items()):
                 try:
                     toggles, renames = plan_import(name, wanted, state['tasks'].get(name, {}), tasks.get(name, {}))
@@ -928,10 +1069,11 @@ def sync(settings, home, dry=False):
             if pending.keys() - {p.name for p in active}:
                 raise ValueError('disabled project has pending phone edits; re-enable and import before disabling')
             for project in active:
-                if project.name not in pending or project.name in held:
+                if (project.name not in pending and project.name not in edits) or project.name in held:
                     continue
                 try:
-                    done = import_project(settings, project, pending[project.name], state['tasks'].get(project.name, {}), tasks[project.name], home)
+                    done = import_project(settings, project, pending.get(project.name, {}), state['tasks'].get(project.name, {}),
+                                          tasks[project.name], home, edits.get(project.name))
                 except Rejected as exc:
                     origin = sources.get(project.name, set())
                     if origin and all(k.startswith(TASK_DIR + '/') for k in origin):
@@ -949,6 +1091,7 @@ def sync(settings, home, dry=False):
             for key, reason in rejected.items():
                 if owner(key) not in held:
                     reject(key, reason)
+            atomic(home / 'pending.json', (json.dumps({k: v for k, v in quiet['pending'].items() if k in quiet['keep']}, indent=2) + '\n').encode())
             files, tasks, omissions = inventory(settings, failed=held)
     except (ValueError, OSError) as exc:
         if dry:
@@ -976,6 +1119,9 @@ def sync(settings, home, dry=False):
         try:
             for key, data in files.items():
                 name = owner(key)
+                if key in waiting and key in state['files']:
+                    next_files[key] = state['files'][key]
+                    continue
                 if name in held:
                     continue
                 try:
@@ -1052,7 +1198,7 @@ def sync(settings, home, dry=False):
         issues.append(f'{LEGACY_REPORT}: legacy report has unowned edits; preserved. Move it outside the vault after review.')
     copies = conflict_copies(vault, set(accepted_state['files']) | set(files)) if not issues else []
     issues.extend(held.values())
-    status = report(files, omissions, issues, settings, managed_bytes, ledger, copies, sorted(held))
+    status = report(files, omissions, issues, settings, managed_bytes, ledger, copies, sorted(held), sorted(waiting))
     target = safe(vault, REPORT)
     if target.exists() and content_hash(target) not in {previous_report.get('hash'), digest(status)}:
         raise ValueError(f'{REPORT} has unowned edits; preserve/rename it before retrying')
@@ -1072,7 +1218,7 @@ def sync(settings, home, dry=False):
     if mode != 'off' and (issues or actionable or notices) and previous.get('issue_signature') != signature:
         last['notification_sent'] = notify('Folderwise bridge needs attention. See _folderwise-sync-status.md in your vault.', home)
     elif mode == 'imports' and run_imports:
-        changes = sum(item['toggled'] + item['renamed'] for item in run_imports)
+        changes = sum(item['toggled'] + item['renamed'] + item.get('edited', 0) for item in run_imports)
         last['notification_sent'] = notify(f'Folderwise applied {changes} phone change(s) in {len(run_imports)} project(s). '
                                            'See _folderwise-sync-status.md in your vault.', home)
     last['issue_signature'] = signature
@@ -1328,6 +1474,8 @@ def main():
     ap.add_argument("--max-image-bytes", type=int)
     ap.add_argument("--max-images-total-bytes", type=int)
     ap.add_argument("--unlimited-images", action="store_true")
+    ap.add_argument("--text-edits", choices=["on", "off"], help="configure: accept phone text edits in projects that list folderwise-ibridgeedit patterns")
+    ap.add_argument("--edit-settle-seconds", type=int, help="configure: how long a phone-edited note must stay unchanged before import")
     ap.add_argument("--notifications", choices=["off", "errors", "imports"])
     ap.add_argument("command", choices=["setup", "configure", "plan", "sync", "status", "enable", "disable", "schedule-enable", "schedule-disable", "doctor", "logs", "notify-test", "vault-init", "uninstall", "schedule-prepare", "resolve"])
     ap.add_argument("project", nargs="?", help="enable/disable: project folder; resolve: vault-relative path of a file with a pending phone edit")
@@ -1344,7 +1492,8 @@ def main():
                     raise ValueError("setup requires --source and --vault")
                 settings = dict(version=1, source=str(args.source.expanduser().resolve()), vault=str(args.vault.expanduser().resolve()),
                            mode="full", interval_minutes=5, max_image_bytes=None, max_images_total_bytes=None,
-                           notifications="errors", adapters={}, enabled=False)
+                           notifications="errors", adapters={}, enabled=False, text_edits=False,
+                           edit_settle_seconds=EDIT_SETTLE_SECONDS)
                 if path.exists():
                     previous = config_load(path)
                     if (previous['source'], previous['vault']) != (settings['source'], settings['vault']):
@@ -1359,6 +1508,10 @@ def main():
                         settings[key] = value
                 if args.unlimited_images:
                     settings["max_image_bytes"] = settings["max_images_total_bytes"] = None
+                if args.text_edits:
+                    settings["text_edits"] = args.text_edits == "on"
+                if args.edit_settle_seconds is not None:
+                    settings["edit_settle_seconds"] = args.edit_settle_seconds
                 candidate = path.with_name("config-candidate.json")
                 try:
                     save(candidate, settings)

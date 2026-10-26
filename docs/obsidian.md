@@ -2,7 +2,7 @@
 
 The optional **folderwise-ibridge** keeps your project repositories on your Mac and exports a separate Obsidian vault into iCloud. Read your documents and complete tasks from one dashboard on iPhone. One Mac imports checkbox changes, updates authoritative records, regenerates views, stamps documents, validates them, and creates local Git commits in each project.
 
-The bridge is deliberately simple: checking means complete; unchecking means incomplete. It does **not** interpret a task, confirm evidence, or establish that the described action happened. Task changes do not advance `last_verified`. Project adapters must implement this same boolean behavior without fabricating evidence. A project can additionally accept task **renames** from the phone; see [Rename tasks from iPhone](#rename-tasks-from-iphone-opt-in).
+The bridge is deliberately simple: checking means complete; unchecking means incomplete. It does **not** interpret a task, confirm evidence, or establish that the described action happened. Task changes do not advance `last_verified`. Project adapters must implement this same boolean behavior without fabricating evidence. A project can additionally accept task **renames** from the phone; see [Rename tasks from iPhone](#rename-tasks-from-iphone-opt-in). Selected notes can accept **text edits** too; see [Edit notes from iPhone](#edit-notes-from-iphone-opt-in).
 
 ## Layout and prerequisites
 
@@ -79,7 +79,7 @@ To refresh immediately, run `uv run _tools/icloud_bridge.py sync` on the Mac. Th
 
 Configure Tasks for simple toggles: disable automatic done/created/cancelled dates, leave its global filter empty, use ordinary space/x statuses, and avoid recurring tasks or on-completion deletion. Those features modify more than a checkbox and are outside this bridge's contract. A plugin-added date is preserved and reported as an unsupported edit, rather than silently discarded. Dataview is optional for property tables; [Dataview TASK](https://blacksmithgu.github.io/obsidian-dataview/queries/query-types/#task) can also toggle a checkbox, provided completion metadata insertion is disabled.
 
-Handwritten task checkboxes can also be toggled in the copied source document. Generated checkboxes must be toggled through their mapped dashboard projection. Text edits to notes, new documents, deletions, custom task statuses and capture inboxes are not imported in this release; the only title changes accepted are the opt-in renames below. Missing exported files are restored from Mac; phone deletions never delete a source file. Unmanaged files are left alone.
+Handwritten task checkboxes can also be toggled in the copied source document. Generated checkboxes must be toggled through their mapped dashboard projection. Text edits to notes are imported only for the opt-in notes described below. New documents, deletions, custom task statuses and capture inboxes are not imported in this release; the only title changes accepted are the opt-in renames below. Missing exported files are restored from Mac; phone deletions never delete a source file. Unmanaged files are left alone.
 
 ### Rename tasks from iPhone (opt-in)
 
@@ -108,6 +108,43 @@ A rename is accepted only when all of these hold. Otherwise the whole save of th
 | Adapter tasks must advertise `editable: ["title"]` | Only the project's adapter knows how to rewrite its records |
 
 Task renames made inside the copied source notes are not accepted; keep using the dashboard views.
+
+### Edit notes from iPhone (opt-in)
+
+A copied Markdown note can accept text edits from the phone. This is **off twice over**: the bridge must have the switch on, and each project must list which notes may be edited.
+
+```sh
+uv run _tools/icloud_bridge.py configure --text-edits on      # bridge-wide switch (default off)
+uv run _tools/icloud_bridge.py configure --edit-settle-seconds 120   # quiet period, default 120
+```
+
+```yaml
+# the project's .docs.yaml (commit it); `*` stays inside a folder, `**` crosses folders
+folderwise-ibridgeedit:
+  - "docs/notes*.md"
+  - "journal/**/*.md"
+```
+
+Patterns are project-relative paths; they may not start with `/` or contain `..`, and only `.md` files can match. On the phone, edit the note's text in Obsidian as usual. Then:
+
+1. The Mac waits for a **quiet period**: the note's exact text must stay unchanged across two scheduled runs and for at least `edit_settle_seconds`, so half-typed sentences are never committed. While it waits the vault copy is left exactly as you saved it and `plan` shows `PHONE EDIT WAITING`.
+2. If the Mac copy is unchanged since it was last exported (a fast-forward), the bridge writes your text into an isolated clone, stamps the note as `human` ("Edit notes via Obsidian iCloud bridge"), runs project lint and the project's hooks, and commits locally. The commit message records counts and `Bridge-Ops: … text-edit=N` and says the text is user-typed and unverified; it never contains the note's text. `last_verified` is not advanced.
+3. The vault copy is then replaced by the stamped note, with its new Change Log row, and the status report lists the commit under **Recent imports** (*Edited* column).
+
+What the bridge protects and refuses (the project pauses and names the note; nothing is lost):
+
+| Edit | Result |
+| --- | --- |
+| Front matter changed in meaning | Refused; the Mac stamps it. Reformatting by Obsidian's Properties editor that leaves the values identical is ignored and the Mac's formatting is kept |
+| Byline, table of contents, Change Log, tables, task blocks or any other `<!-- name:start -->` … `<!-- name:end -->` block changed, or such a marker added | Refused |
+| A copy saved from an older export | Refused, because its Change Log differs from the Mac's; newer Mac text is never undone |
+| More than 200 changed lines, more than half the note removed, an emptied note, over 256 KB or 5,000 lines, or NUL bytes | Refused |
+| Edit fails the project's lint or hooks (for example a broken link) | The Mac note stays unchanged; the error is shown |
+| The note also changed on the Mac since its last export | Paused: the Mac version stays; use `resolve` to keep it, or merge by hand |
+| A task in the same note was toggled or renamed in the same run | Paused until one of the two is resolved |
+| Notes not matching a pattern, new files, deletions, renames, CSV files and attachments | Not imported |
+
+Checkbox toggles inside an editable note still import as ordinary task changes. Windows-style (CRLF) notes keep their line endings. Text typed on the phone enters your repository and may later be read by people or agents, so keep the pattern list narrow, review the commits, and never list notes holding instructions you rely on. A compromised phone or Obsidian plugin can only reach the notes you list, and every change is a local Git commit you can revert.
 
 ## Authoritative CSVs and project adapters
 
