@@ -150,31 +150,36 @@ def locked(home):
         yield
 
 
-def projects(settings, include_disabled=False):
+def projects(settings, include_disabled=False, failed=None):
+    """One validated configuration snapshot per project; discovery failures stay local."""
     source = Path(settings["source"])
     if not source.is_dir():
         raise ValueError("source directory is unavailable")
-    result = []
+    result = {}
     for p in sorted(source.iterdir()):
-        if p.name.startswith(("_", ".")) or p.is_symlink() or not p.is_dir() or not (p / ".docs.yaml").is_file():
+        if p.name.startswith(("_", ".")) or p.is_symlink() or not p.is_dir():
             continue
-        if (p / ".docs.yaml").is_symlink():
-            raise ValueError(f"symlink project config: {p.name}")
-        cfg = dl.load_config(p)
-        enabled = cfg.get("folderwise-ibridgesync", False)
-        if type(enabled) is not bool:
-            raise ValueError(f"{p.name}: folderwise-ibridgesync must be boolean")
-        if type(cfg.get("folderwise-ibridgerename", False)) is not bool:
-            raise ValueError(f"{p.name}: folderwise-ibridgerename must be boolean")
-        if enabled or include_disabled:
-            if Path(git(p, "rev-parse", "--show-toplevel").strip()).resolve() != p.resolve():
-                raise ValueError(f"{p.name}: expected an independent Git repository")
-            result.append(p)
+        config = p / ".docs.yaml"
+        if not config.is_file() and not config.is_symlink():
+            continue
+        try:
+            if config.is_symlink():
+                raise ValueError(f"symlink project config: {p.name}")
+            cfg = dl.parse_config((p / ".docs.yaml").read_text())
+            enabled = cfg.get("folderwise-ibridgesync", False)
+            if type(enabled) is not bool:
+                raise ValueError("folderwise-ibridgesync must be boolean")
+            if type(cfg.get("folderwise-ibridgerename", False)) is not bool:
+                raise ValueError("folderwise-ibridgerename must be boolean")
+            if enabled or include_disabled:
+                if Path(git(p, "rev-parse", "--show-toplevel").strip()).resolve() != p.resolve():
+                    raise ValueError("expected an independent Git repository")
+                result[p] = cfg
+        except (ValueError, OSError, yaml.YAMLError) as exc:
+            if failed is None:
+                raise ValueError(f"{p.name}: {exc}") from None
+            failed[p.name] = f"{p.name}: {exc}"
     return result
-
-
-class ProjectError(ValueError):
-    """A problem that pauses one project; every other project keeps syncing."""
 
 
 def owner(key):
@@ -183,11 +188,6 @@ def owner(key):
     if parts[0] == TASK_DIR:
         return Path(key).stem if len(parts) == 2 else None
     return parts[0] if len(parts) > 1 else None
-
-
-def rename_projects(settings):
-    """Names of enabled projects whose phone title edits are allowed (opt-in, default off)."""
-    return {p.name for p in projects(settings) if dl.load_config(p).get("folderwise-ibridgerename", False)}
 
 
 def tracked(project):
@@ -208,24 +208,8 @@ def tracked(project):
 def markdown_tasks(text, path):
     """List tasks outside front matter, fenced examples and generated blocks."""
     tasks, counts = [], {}
-    fence = None
     generated = False
-    front = text.startswith("---\n")
-    for line, raw in enumerate(text.splitlines()):
-        if front:
-            if line and raw == "---":
-                front = False
-            continue
-        marker = re.match(r"^\s*(`{3,}|~{3,})", raw)
-        if marker:
-            char = marker[1][0]
-            if fence and char == fence[0] and len(marker[1]) >= fence[1]:
-                fence = None
-            elif not fence:
-                fence = (char, len(marker[1]))
-            continue
-        if fence:
-            continue
+    for line, raw in enumerate(dl.mask_for_links(text).splitlines()):
         if re.search(r"<!--\s*[^>]*:start\b", raw):
             generated = True
         if generated:
@@ -271,7 +255,7 @@ def adapter(settings, project, operation, changes=None):
         if not isinstance(task.get("id"), str) or not task["id"] or task["id"] in ids or type(task.get("checked")) is not bool:
             raise ValueError("adapter tasks need unique string id and boolean checked")
         ids.add(task["id"])
-        if not safe(project, task["path"]).is_file() or not isinstance(task.get("title"), str):
+        if not isinstance(task.get("path"), str) or not safe(project, task["path"]).is_file() or not isinstance(task.get("title"), str):
             raise ValueError("adapter tasks need a title and an existing source document path")
         editable = task.get("editable", [])
         if not isinstance(editable, list) or not all(isinstance(s, str) for s in editable):
@@ -283,7 +267,7 @@ def adapter(settings, project, operation, changes=None):
 def inventory(settings, selected_projects=None, failed=None):
     files, tasks, omissions = {}, {}, []
     total_images = 0
-    for project in (projects(settings) if selected_projects is None else selected_projects):
+    for project, cfg in (projects(settings, failed=failed) if selected_projects is None else selected_projects).items():
         mark = (set(files), len(omissions), total_images)
         try:
             names = tracked(project)
@@ -334,7 +318,7 @@ def inventory(settings, selected_projects=None, failed=None):
                 if image:
                     total_images += size
                 files[key] = p
-            can_rename = dl.load_config(project).get("folderwise-ibridgerename", False)
+            can_rename = cfg.get("folderwise-ibridgerename", False)
             note = ("Generated task view. Checkbox toggles and title edits are imported; keep each line's trailing (source) link."
                     if can_rename else "Generated task view. Only checkbox toggles are imported.")
             projection = [f"# {project.name} tasks", "", note, ""]
@@ -345,7 +329,7 @@ def inventory(settings, selected_projects=None, failed=None):
                 projection.append(f"- [{'x' if task['checked'] else ' '}] {view_title(task['title'])}{SOURCE_TAIL}../{target}))")
             files[f"{TASK_DIR}/{project.name}.md"] = ("\n".join(projection) + "\n").encode()
             tasks[project.name]["_projection"] = mapping
-        except ValueError as exc:
+        except (ValueError, OSError, yaml.YAMLError) as exc:
             if failed is None:
                 raise
             # One project's problem pauses that project only; it keeps its previous export.
@@ -462,15 +446,15 @@ def requests(vault, state, renames=frozenset(), failures=None):
     A bad edit to a copied note is recorded in `failures` for its project when a dict is given."""
     wanted, sources, accepted, rejected = {}, {}, {}, {}
     for key, entry in state.get("files", {}).items():
-        p = safe(vault, key)
-        if not p.is_file() or "text" not in entry:
-            continue
-        data = p.read_text()
-        if data == entry["text"]:
-            continue
         project = entry.get("project")
         view = key.startswith(TASK_DIR + "/")
         try:
+            p = safe(vault, key)
+            if not p.is_file() or "text" not in entry:
+                continue
+            data = p.read_text()
+            if data == entry["text"]:
+                continue
             delta = view_changes(entry["text"], data, project in renames) if view else task_changes(entry["text"], data)
             mapping = {t["line"]: t for t in entry.get("tasks", [])}
             staged = {}
@@ -479,16 +463,22 @@ def requests(vault, state, renames=frozenset(), failures=None):
                     raise Rejected("checkbox has no authoritative task mapping")
                 staged[mapping[line]["id"]] = change
             wanted[project] = merge_edits(wanted.get(project, {}), staged)
+            accepted_hash = content_hash(p)
         except Rejected as exc:
             if view:
                 rejected[key] = str(exc)
-            elif failures is None:
+            elif failures is None or project is None:
                 raise ValueError(f"{key}: {exc}") from None
             else:
                 failures.setdefault(project, f"{key}: {exc}")
             continue
+        except (ValueError, OSError) as exc:
+            if failures is None or project is None:
+                raise
+            failures.setdefault(project, f"{key}: {exc}")
+            continue
         sources.setdefault(project, set()).add(key)
-        accepted[key] = content_hash(p)
+        accepted[key] = accepted_hash
     return wanted, sources, accepted, rejected
 
 
@@ -531,10 +521,9 @@ def plan_import(name, wanted, baseline, current):
     return toggles, renames
 
 
-def import_project(settings, project, wanted, baseline, current, home):
-    toggles, renames = plan_import(project.name, wanted, baseline, current)
-    if not toggles and not renames:
-        return None
+@contextmanager
+def project_transaction(project, home):
+    """Prepare and publish one validated local commit without touching the live index."""
     if git(project, "status", "--porcelain"):
         raise ValueError(f"{project.name}: uncommitted Mac changes; commit them before importing")
     head = git(project, "rev-parse", "HEAD").strip()
@@ -559,6 +548,21 @@ def import_project(settings, project, wanted, baseline, current, home):
             r = subprocess.run(["git", "-C", project, "config", "--get", key], capture_output=True, text=True)
             if r.returncode == 0:
                 git(clone, "config", key, r.stdout.strip())
+        yield clone
+        if git(project, "status", "--porcelain") or git(project, "rev-parse", "HEAD").strip() != head:
+            raise ValueError(f"{project.name}: Mac repository changed during transaction; retry after review")
+        git(project, "fetch", "--quiet", "--no-tags", str(clone), "HEAD")
+        git(project, "merge", "--ff-only", "--quiet", "FETCH_HEAD")
+    finally:
+        if clone.exists():
+            shutil.rmtree(clone)
+
+
+def import_project(settings, project, wanted, baseline, current, home):
+    toggles, renames = plan_import(project.name, wanted, baseline, current)
+    if not toggles and not renames:
+        return None
+    with project_transaction(project, home) as clone:
         md, ac, originals = {}, [], {}
         for key in sorted(toggles.keys() | renames.keys()):
             task = current[key]
@@ -587,7 +591,7 @@ def import_project(settings, project, wanted, baseline, current, home):
             safe(clone, rel).write_bytes("".join(lines).encode())
         if ac:
             adapter(settings, clone, "apply", ac)
-        config = dl.load_config(clone)
+        config = dl.parse_config((clone / dl.CONFIG_NAME).read_text())
         summary = ("Toggle and rename tasks" if toggles and renames else "Rename tasks" if renames else "Toggle tasks") + " via Obsidian iCloud bridge"
         for rel in git(clone, "diff", "--name-only", "-z").split("\0"):
             if rel.endswith(".md"):
@@ -619,14 +623,7 @@ def import_project(settings, project, wanted, baseline, current, home):
         git(clone, "commit", "--quiet", "-m", subject, "-m",
             body + f"Validation: project adapter, Folderwise lint and Git hooks.\n\nBridge: folderwise-ibridge\n"
             f"Bridge-Ops: toggle={len(toggles)} rename={len(renames)}")
-        if git(project, "status", "--porcelain") or git(project, "rev-parse", "HEAD").strip() != head:
-            raise ValueError(f"{project.name}: Mac repository changed during import; retry after review")
-        git(project, "fetch", "--quiet", "--no-tags", str(clone), "HEAD")
-        git(project, "merge", "--ff-only", "--quiet", "FETCH_HEAD")
-        return dict(commit=git(project, "rev-parse", "--short", "HEAD").strip(), toggled=len(toggles), renamed=len(renames))
-    finally:
-        if clone.exists():
-            shutil.rmtree(clone)
+    return dict(commit=git(project, "rev-parse", "--short", "HEAD").strip(), toggled=len(toggles), renamed=len(renames))
 
 
 def stash_phone_text(home, key, path):
@@ -907,9 +904,19 @@ def sync(settings, home, dry=False):
             recover_export(home, vault)
             prune_private(home, ledger)
         state = read_json(home / 'state.json', {'files': {}, 'tasks': {}})
-        files, tasks, omissions = inventory(settings, failed=None if dry else held)
-        snapshot = {key: existing_hash(safe(vault, key)) for key in state['files'].keys() | files.keys()}
-        pending, sources, accepted, rejected = requests(vault, state, rename_projects(settings), held)
+        active = projects(settings, failed=None if dry else held)
+        files, tasks, omissions = inventory(settings, selected_projects=active, failed=None if dry else held)
+        snapshot = {}
+        for key in state['files'].keys() | files.keys():
+            try:
+                snapshot[key] = existing_hash(safe(vault, key))
+            except (ValueError, OSError) as exc:
+                name = owner(key)
+                if name is None:
+                    raise
+                held[name] = f"{key}: {exc}"
+        renames = {p.name for p, cfg in active.items() if cfg.get("folderwise-ibridgerename", False)}
+        pending, sources, accepted, rejected = requests(vault, state, renames, held)
         if dry:
             for key, reason in rejected.items():
                 preview.append(f'PHONE EDIT REJECTED {key}: {reason}; the text would be saved and the view restored')
@@ -924,8 +931,7 @@ def sync(settings, home, dry=False):
                     if toggles or renames:
                         preview.append(f'PHONE EDIT {name}: would toggle {len(toggles)} and rename {len(renames)} task(s)')
         else:
-            active = projects(settings)
-            if pending.keys() - {p.name for p in active}:
+            if pending.keys() - {p.name for p in active} - held.keys():
                 raise ValueError('disabled project has pending phone edits; re-enable and import before disabling')
             for project in active:
                 if project.name not in pending or project.name in held:
@@ -940,7 +946,7 @@ def sync(settings, home, dry=False):
                     else:
                         held[project.name] = str(exc)
                     continue
-                except ValueError as exc:
+                except (ValueError, OSError) as exc:
                     held[project.name] = str(exc)
                     continue
                 if done:
@@ -949,7 +955,7 @@ def sync(settings, home, dry=False):
             for key, reason in rejected.items():
                 if owner(key) not in held:
                     reject(key, reason)
-            files, tasks, omissions = inventory(settings, failed=held)
+            files, tasks, omissions = inventory(settings, selected_projects=active, failed=held)
     except (ValueError, OSError) as exc:
         if dry:
             raise
@@ -963,7 +969,8 @@ def sync(settings, home, dry=False):
         for key, data in files.items():
             print(f'COPY {key}: {content_size(data)} bytes')
         for key in state['files'].keys() - files.keys():
-            print(f'REMOVE if unchanged: {key}')
+            if owner(key) not in held:
+                print(f'REMOVE if unchanged: {key}')
         for item in omissions:
             print(f"SKIP {item['path']}: {item['bytes']} bytes; {item['reason']}")
         for line in preview:
@@ -1187,42 +1194,14 @@ def seed_vaults(settings, home):
 
 
 def enroll_project(project, home):
-    """Commit the setting in a disposable clone, without touching a live index."""
-    head = git(project, 'rev-parse', 'HEAD').strip()
-    work = home / 'enroll-work'
-    work.mkdir(exist_ok=True)
-    link = work / '_tools'
-    if not link.exists():
-        link.symlink_to(TOOLS, target_is_directory=True)
-    clone = work / project.name
-    if clone.exists():
-        shutil.rmtree(clone)
-    try:
-        run(['git', 'clone', '--quiet', '--shared', project, clone])
-        hooks = Path(git(project, 'rev-parse', '--git-path', 'hooks').strip())
-        if not hooks.is_absolute():
-            hooks = project / hooks
-        if hooks.is_dir():
-            shutil.copytree(hooks, clone / '.git/hooks', dirs_exist_ok=True)
-        if not (clone / '.git/hooks/pre-commit').exists():
-            dl.install_hook(clone, TOOLS)
-        for key in ('user.name', 'user.email'):
-            r = subprocess.run(['git', '-C', project, 'config', '--get', key], capture_output=True, text=True)
-            if r.returncode == 0:
-                git(clone, 'config', key, r.stdout.strip())
-        target = clone / '.docs.yaml'
-        target.write_text(target.read_text() + '\nfolderwise-ibridgesync: true\n')
-        dl.load_config(clone)
-        git(clone, 'add', '--', '.docs.yaml')
-        git(clone, 'commit', '--quiet', '-m', 'Enable project participation in the Obsidian iCloud bridge', '-m',
-            'Record the user-selected bridge setup. Task imports remain subject to project validation and hooks.\n\nBridge: folderwise-ibridge')
-        if git(project, 'status', '--porcelain') or git(project, 'rev-parse', 'HEAD').strip() != head:
-            raise ValueError(f'{project.name}: source changed during setup; retry after review')
-        git(project, 'fetch', '--quiet', '--no-tags', str(clone), 'HEAD')
-        git(project, 'merge', '--quiet', '--ff-only', 'FETCH_HEAD')
-    finally:
-        if clone.exists():
-            shutil.rmtree(clone)
+    """Enroll through the same validated transaction used for task imports."""
+    with project_transaction(project, home) as clone:
+        target = clone / ".docs.yaml"
+        target.write_text(target.read_text() + "\nfolderwise-ibridgesync: true\n")
+        dl.parse_config(target.read_text())
+        git(clone, "add", "--", ".docs.yaml")
+        git(clone, "commit", "--quiet", "-m", "Enable project participation in the Obsidian iCloud bridge", "-m",
+            "Record the user-selected bridge setup. Task imports remain subject to project validation and hooks.\n\nBridge: folderwise-ibridge")
 
 
 def setup_bridge(settings, path, dry=False):
@@ -1230,7 +1209,7 @@ def setup_bridge(settings, path, dry=False):
     roots = projects(settings, include_disabled=True)
     enrollment = []
     for project in roots:
-        cfg = dl.load_config(project)
+        cfg = roots[project]
         # Missing means not configured yet; an explicit false remains an opt-out.
         if 'folderwise-ibridgesync' not in cfg:
             if git(project, 'status', '--porcelain'):
@@ -1246,7 +1225,7 @@ def setup_bridge(settings, path, dry=False):
     print('Enroll unconfigured projects: ' + (', '.join(p.name for p in enrollment) or 'none'))
     print('Preserve explicit project opt-outs and existing Obsidian settings. Install Tasks/Dataview through Obsidian.')
     if dry:
-        eligible = [p for p in roots if p in enrollment or dl.load_config(p).get('folderwise-ibridgesync', False)]
+        eligible = {p: cfg for p, cfg in roots.items() if p in enrollment or cfg.get('folderwise-ibridgesync', False)}
         files, _, omissions = inventory(settings, selected_projects=eligible)
         print(f"Preview export: {len(files)} files / {sum(content_size(data) for data in files.values()):,} bytes; {len(omissions)} omissions")
         for key, data in files.items():

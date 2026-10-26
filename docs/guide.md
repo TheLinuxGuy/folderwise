@@ -107,7 +107,11 @@ Validate every doc (front matter, status line, Change Log, links, tables, index)
 cd ~/folderwise/homelab-inventory && uv run ../_tools/docs_lint.py
 ```
 
-Commit (the pre-commit hook runs the same check on what you staged):
+The pre-commit hook validates the complete staged document graph: document contents, exact-case link targets, anchors, CSV tables, README index and `.docs.yaml` all come from Git's index. A target that only exists on disk cannot satisfy a committed link. Unstaged fixes cannot hide a broken staged version, and unstaged edits do not invalidate a correct staged version. Deleting a document or changing a heading also checks incoming links from unchanged documents. Stage the required documents, configuration and refreshed README together.
+
+The shared `_tools/docsource.py` reader gives lint and README catalogue checks the same working-tree or Git-index view; ordinary `docs_lint.py` still checks the working tree.
+
+Commit (the pre-commit hook runs this staged check):
 
 ```bash
 cd ~/folderwise/homelab-inventory && git add -A && git commit -m "Describe what changed"
@@ -404,6 +408,7 @@ Off by default: VS Code's Outline panel (Explorer sidebar, or `Cmd+Shift+O`) alr
 
 - The setting is `toc: true` in the doc's front matter. It adds a `## Contents` list between `<!-- toc:start -->` and `<!-- toc:end -->`, before the first `##` section.
 - Never edit the list by hand. Every stamp regenerates it, and `docs_lint.py` fails if it is stale (for example after renaming a heading), so re-stamp the doc after changing headings.
+- TOCs, anchor checks, heading/move rewrites and bridge task discovery share one Markdown fence scanner. Nested examples can use longer backtick or tilde fences; a closing fence must use the same character, be at least as long and have only trailing whitespace. An unclosed fence hides the remaining example text. Code examples do not become headings, links or phone-editable tasks.
 - Depth comes from `toc_depth` in the project's `.docs.yaml`: 2 (default) lists `##` headings, 3 also lists `###`.
 
 ### Human-readable extras
@@ -456,6 +461,10 @@ python3 _tools/framework_checkout.py --minimal --omit README.md --remove-obsidia
 ```
 
 The `.docs.yaml` setting `folderwise-ibridgerename` is a boolean that defaults to false. When true, the project's generated task view also accepts task title edits from the phone (Markdown tasks and adapter tasks that advertise `editable: ["title"]`); see [Rename tasks from iPhone](obsidian.md#rename-tasks-from-iphone-opt-in) for the validation rules, commit provenance and conflict handling. A non-boolean value is rejected. A rejected edit to a generated view is saved privately on the Mac under the bridge state's `rejected/` folder (30 days), the view is restored, and the status report lists it; bridge state also keeps a small `ledger.json` of recent imports and rejections and records a `schema` version. The status report additionally lists recent imports and iCloud conflict copies. Brief iCloud file locks are retried on the next run instead of alerting.
+
+Each sync validates project configurations once and reuses that snapshot for inventory, rename permissions and imports. An invalid timezone, malformed YAML, a non-boolean project flag, a symlink config or a project-specific read/adapter failure pauses that project and preserves its previous export; healthy projects continue. The status report and run diagnostics record the pause. `plan` still exits with an error for an invalid configuration or inventory. Setup remains strict about its selected projects.
+
+Setup enrollment and phone task imports share the same disposable-clone transaction: copy the project's hooks and Git identity, apply the requested edit, validate and commit, then fast-forward the live repository only if its worktree and HEAD are unchanged. A failed operation removes its disposable clone and preserves pending phone edits for retry.
 
 The bridge also generates `Tasks.md` and `_Folderwise Tasks/<project-folder-name>.md` in the iCloud vault: one combined task view per enabled project, refreshed after imports on each sync. These are interactive views; Mac project files and adapter-managed records remain authoritative. Checkbox toggles are supported everywhere; title edits only for projects with `folderwise-ibridgerename: true`. See [generated task folder ownership, naming, and lifecycle](obsidian.md#generated-task-folder-and-naming).
 

@@ -132,6 +132,7 @@ Check project health and recent updates, then review any notes whose verificatio
 ## 🔒 Privacy and safety
 
 - 🏠 Your knowledge stays local, in your own Git repositories. Optional iCloud export is user-configured; Folderwise provides no hosted sync service.
+- ✅ Project pre-commit checks validate the staged document graph, including links and the README index. [Validation details](docs/guide.md#check-and-commit).
 - 🚧 The framework repository is an allowlist, and a guard rejects knowledge projects, secrets, caches, symlinks and nested repositories before they can be committed.
 - ⚠️ The guard checks paths, not meaning: review diffs before publishing, and never put passwords or tokens in documents.
 - 🤖 The shipped agent permission defaults are defaults, not a security boundary. Review them before using an agent.
