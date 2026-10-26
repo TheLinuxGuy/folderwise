@@ -109,6 +109,8 @@ Every tool, flag and setting is documented in the [full guide](docs/guide.md).
 - **Rename tasks** with per-project opt-in, or **edit selected notes** with both the bridge text-edit switch and project path-pattern opt-in. Generated task views accept only supported task edits.
 - **Keep a local history.** An available Mac validates imports against clean working trees and conflict rules, updates source files, and commits locally. Local commits do not push to GitHub.
 
+The iPhone bridge supports nested and quoted tasks, Tasks dates/priorities and custom statuses, and plugin-generated recurrence. See the [task compatibility and acceptance requirements](docs/obsidian.md#task-format-compatibility).
+
 Scheduled sync defaults to **five minutes, plus iCloud delivery delay**. Folderwise provides no hosted sync service.
 
 **[Set up Obsidian + iCloud →](docs/obsidian.md)** · [See the task round trip](docs/obsidian.md#complete-and-reopen-from-iphone) · [Acceptance checklist](docs/ibridge-testing.md)
