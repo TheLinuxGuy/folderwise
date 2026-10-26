@@ -50,10 +50,8 @@ def blank(m: re.Match) -> str:
 
 def mask(text: str) -> str:
     """Same-length copy with front matter, code, generated blocks and comments blanked (offsets stay valid)."""
-    fm = dl.FM_RE.match(text)
-    if fm:
-        text = blank(fm) + text[fm.end():]
-    for rx in (dl.FENCE_RE, dl.TABLE_BLOCK_RE, CODE_SPAN_RE, COMMENT_RE):
+    text = dl.mask_for_links(text)
+    for rx in (dl.TABLE_BLOCK_RE, CODE_SPAN_RE, COMMENT_RE):
         text = rx.sub(blank, text)
     return text
 
@@ -90,21 +88,6 @@ def rewrite_links(text: str, rewriter) -> tuple[str, int]:
     for s, e, r in sorted(edits, reverse=True):
         text = text[:s] + r + text[e:]
     return text, len(edits)
-
-
-def heading_list(text: str) -> list[tuple[int, int, str, str]]:
-    """(line index, level, title, anchor) for every heading, with GitHub-style duplicate suffixes."""
-    seen: dict[str, int] = {}
-    out = []
-    for i, line in enumerate(dl.mask_for_links(text).split("\n")):
-        m = dl.HEADING_RE.match(line)
-        if m:
-            title = m.group(2).strip()
-            base = dl.slugify(title)
-            n = seen.get(base, 0)
-            seen[base] = n + 1
-            out.append((i, len(m.group(1)), title, base if n == 0 else f"{base}-{n}"))
-    return out
 
 
 # ---------- shared apply step ----------
@@ -299,7 +282,7 @@ def plan_heading(root: Path, cfg: dict, file: str, old: str, new: str, nth: int)
     if not path.is_file() or not file.endswith(".md"):
         raise Fail(f"not a markdown file: {file}")
     text = path.read_text()
-    old_list = heading_list(text)
+    old_list = dl.heading_list(text)
     hits = [h for h in old_list if h[2] == old]
     if not hits:
         raise Fail(f"heading '{old}' not found in {file}")
@@ -309,7 +292,7 @@ def plan_heading(root: Path, cfg: dict, file: str, old: str, new: str, nth: int)
     lines = text.split("\n")
     lines[idx] = f"{'#' * level} {new}"
     new_text = "\n".join(lines)
-    new_list = heading_list(new_text)
+    new_list = dl.heading_list(new_text)
     amap = {o[3]: n[3] for o, n in zip(old_list, new_list) if o[3] != n[3]}
     if not amap:
         raise Fail("the new heading produces the same anchor; nothing to rewrite (edit the heading by hand)")

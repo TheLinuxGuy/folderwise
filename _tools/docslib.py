@@ -11,9 +11,13 @@ import re
 from decimal import ROUND_HALF_UP, Decimal, localcontext
 from urllib.parse import unquote
 from pathlib import Path
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
+
+if TYPE_CHECKING:
+    from docsource import DocumentSource
 
 CONFIG_NAME = ".docs.yaml"
 CL_START, CL_END = "<!-- changelog:start -->", "<!-- changelog:end -->"
@@ -116,25 +120,26 @@ def slugify(text: str) -> str:
     return re.sub(r"[^\w\- ]", "", text.strip().lower()).replace(" ", "-")
 
 
-def toc_lines(body: str, depth: int = DEFAULT_TOC_DEPTH) -> list[str]:
-    """Bullet lines for headings H2..H<depth>, skipping code fences, 'Contents' and 'Change Log'."""
+def heading_list(text: str) -> list[tuple[int, int, str, str]]:
+    """(line index, level, title, anchor), using one fence and duplicate-heading policy."""
     seen: dict[str, int] = {}
-    lines, fence = [], None
-    for raw in body.splitlines():
-        stripped = raw.lstrip()
-        if stripped.startswith(("```", "~~~")):
-            fence = None if fence else stripped[:3]
-            continue
-        m = None if fence else HEADING_RE.match(raw)
-        if not m or m.group(2).strip() == "Contents":
-            continue
-        level, title = len(m.group(1)), m.group(2).strip()
-        base = slugify(title)
-        n = seen.get(base, 0)
-        seen[base] = n + 1
-        if 2 <= level <= depth and title not in TOC_SKIP:
-            lines.append(f"{'  ' * (level - 2)}- [{title}](#{base if n == 0 else f'{base}-{n}'})")
-    return lines
+    headings = []
+    for i, line in enumerate(mask_for_links(text).splitlines()):
+        m = HEADING_RE.match(line)
+        if m:
+            title = m.group(2).strip()
+            base = slugify(title)
+            n = seen.get(base, 0)
+            seen[base] = n + 1
+            headings.append((i, len(m.group(1)), title, base if n == 0 else f"{base}-{n}"))
+    return headings
+
+
+def toc_lines(body: str, depth: int = DEFAULT_TOC_DEPTH) -> list[str]:
+    """Bullet lines for prose headings H2..H<depth>, excluding generated section titles."""
+    return [f"{'  ' * (level - 2)}- [{title}](#{anchor})"
+            for _, level, title, anchor in heading_list(body)
+            if 2 <= level <= depth and title not in TOC_SKIP]
 
 
 def toc_entries(body: str, depth: int) -> str:
@@ -152,7 +157,7 @@ def apply_toc(body: str, enabled: bool, depth: int = DEFAULT_TOC_DEPTH) -> str:
     block = toc_block(body, depth)
     if TOC_BLOCK_RE.search(body):
         return TOC_BLOCK_RE.sub(lambda _: block, body, count=1)
-    m = re.search(r"^## (?!Contents\b)", body, re.M)
+    m = re.search(r"^## (?!Contents\b)", mask_for_links(body), re.M)
     pos = m.start() if m else len(body)
     return body[:pos] + f"## Contents\n\n{block}\n\n" + body[pos:]
 
@@ -229,13 +234,27 @@ def find_project_root(start: Path) -> Path | None:
     return None
 
 
-def load_config(root: Path) -> dict:
-    cfg = yaml.safe_load((root / CONFIG_NAME).read_text()) or {}
+def parse_config(text: str) -> dict:
+    try:
+        cfg = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid project YAML: {exc}") from None
+    if cfg is None:
+        cfg = {}
+    if not isinstance(cfg, dict):
+        raise ValueError("project config must be a YAML mapping")
     try:
         ZoneInfo(cfg.get("timezone", DEFAULT_TZ))
-    except (ZoneInfoNotFoundError, ValueError):
-        raise SystemExit(f"{root / CONFIG_NAME}: unknown timezone {cfg.get('timezone')!r} (use an IANA name like {DEFAULT_TZ})")
+    except (ZoneInfoNotFoundError, ValueError, TypeError):
+        raise ValueError(f"unknown timezone {cfg.get('timezone')!r} (use an IANA name like {DEFAULT_TZ})") from None
     return cfg
+
+
+def load_config(root: Path) -> dict:
+    try:
+        return parse_config((root / CONFIG_NAME).read_text())
+    except (ValueError, yaml.YAMLError) as exc:
+        raise SystemExit(f"{root / CONFIG_NAME}: {exc}") from None
 
 
 def is_excluded(rel: Path, cfg: dict) -> bool:
@@ -366,7 +385,7 @@ def validate(meta: dict | None, body: str, cfg: dict) -> list[str]:
 
 LINK_RE = re.compile(r'(!?)\[((?:[^\]\\]|\\.)*)\]\(\s*(<[^>]*>|[^)\s]*)(?:\s+"[^"]*")?\s*\)')
 SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
-FENCE_RE = re.compile(r"^[ \t]*(```|~~~).*?^[ \t]*\1[ \t]*$", re.S | re.M)
+FENCE_MARKER_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 MENTION_RE = re.compile(r"(?<![\w/.#-])((?:[\w.-]+/)*[\w.-]+\.md)(?![\w/-])")
 ID_RE = re.compile(r"""<a\s+[^>]*?(?:id|name)=["']([^"']+)["']""")
 
@@ -376,25 +395,33 @@ def _blank(m: re.Match) -> str:
 
 
 def mask_for_links(text: str) -> str:
-    """Blank out front matter and fenced code (keeping line numbers) so only real prose is scanned."""
+    """Mask front matter and fenced code, preserving every offset and line ending.
+
+    A closing fence must use the opening character, be at least as long, and
+    have no info string. An unclosed fence hides the remainder of the document.
+    """
     fm = FM_RE.match(text)
     if fm:
-        text = "\n" * fm.group(0).count("\n") + text[fm.end():]
-    return FENCE_RE.sub(_blank, text)
+        text = re.sub(r"[^\r\n]", " ", fm.group(0)) + text[fm.end():]
+    lines, fence = [], None
+    for line in text.splitlines(keepends=True):
+        marker = FENCE_MARKER_RE.match(line.rstrip("\r\n"))
+        hidden = fence is not None
+        if marker:
+            token, tail = marker.groups()
+            if fence:
+                if token[0] == fence[0] and len(token) >= fence[1] and not tail.strip():
+                    fence = None
+            elif token[0] != "`" or "`" not in tail:
+                fence = (token[0], len(token))
+                hidden = True
+        lines.append(re.sub(r"[^\r\n]", " ", line) if hidden else line)
+    return "".join(lines)
 
 
 def heading_anchors(text: str) -> set[str]:
-    """GitHub-style anchors for every heading (with -1/-2 duplicate suffixes) plus explicit <a id=...>."""
-    seen: dict[str, int] = {}
-    out = set(ID_RE.findall(text))
-    for line in mask_for_links(text).splitlines():
-        m = HEADING_RE.match(line)
-        if m:
-            base = slugify(m.group(2))
-            n = seen.get(base, 0)
-            seen[base] = n + 1
-            out.add(base if n == 0 else f"{base}-{n}")
-    return out
+    """Heading anchors and explicit prose <a id=...> anchors."""
+    return {anchor for _, _, _, anchor in heading_list(text)} | set(ID_RE.findall(mask_for_links(text)))
 
 
 def _exact_path(root: Path, rel: str) -> Path | None:
@@ -407,7 +434,7 @@ def _exact_path(root: Path, rel: str) -> Path | None:
     return cur
 
 
-def check_target(target: str, rel: Path, root: Path, own: set[str], read_text) -> str | None:
+def check_target(target: str, rel: Path, own: set[str], source: DocumentSource) -> str | None:
     t = target[1:-1] if target.startswith("<") and target.endswith(">") else target
     if not t:
         return "empty link target"
@@ -425,24 +452,24 @@ def check_target(target: str, rel: Path, root: Path, own: set[str], read_text) -
     norm = posixpath.normpath(posixpath.join(rel.parent.as_posix(), path))
     if norm == ".." or norm.startswith("../"):
         return f"'{t}' leaves the project repo; name other projects in plain text instead of linking"
-    dest = _exact_path(root, "" if norm == "." else norm)
+    dest = source.exact_path("" if norm == "." else norm)
     if dest is None:
         return f"target not found: {path} (relative to {rel.parent.as_posix() or '.'}/; links need the .md extension and exact letter case)"
-    if frag and dest.is_file() and dest.suffix == ".md":
-        text = read_text(norm)
+    if frag and source.is_file(norm) and dest.suffix == ".md":
+        text = source.read(norm)
         if text is not None and unquote(frag) not in heading_anchors(text):
             return f"anchor '#{unquote(frag)}' not found in {norm}"
     return None
 
 
-def link_findings(text: str, rel: Path, root: Path, cfg: dict, read_text) -> tuple[list[str], list[str]]:
+def link_findings(text: str, rel: Path, cfg: dict, source: DocumentSource) -> tuple[list[str], list[str]]:
     """Return (errors, warnings). Errors: invalid links. Warnings: other docs mentioned without a link."""
     masked = mask_for_links(text)
     own = heading_anchors(text)
     errs, warns = [], []
     scan = re.sub(r"`[^`\n]*`", lambda m: " " * len(m.group(0)), masked)  # link syntax shown in `code` is not a link
     for m in LINK_RE.finditer(scan):
-        err = check_target(m.group(3), rel, root, own, read_text)
+        err = check_target(m.group(3), rel, own, source)
         if err:
             errs.append(f"line {scan.count(chr(10), 0, m.start()) + 1}: broken link [{m.group(2)[:40]}]: {err}")
     prose = re.sub(r"<!--.*?-->", _blank, LINK_RE.sub(" ", CL_BLOCK_RE.sub(_blank, masked)), flags=re.S)
@@ -453,10 +480,10 @@ def link_findings(text: str, rel: Path, root: Path, cfg: dict, read_text) -> tup
         if tok in reported or is_excluded(Path(tok), cfg):
             continue
         for cand in (rel.parent.as_posix() + "/" + tok, tok, "docs/" + tok):
-            dest = _exact_path(root, posixpath.normpath(cand))
-            if dest and dest.is_file() and dest != root / rel:
+            dest = source.exact_path(posixpath.normpath(cand))
+            if dest and source.is_file(posixpath.normpath(cand)) and dest != source.root / rel:
                 reported.add(tok)
-                suggest = posixpath.relpath(dest.relative_to(root).as_posix(), rel.parent.as_posix() or ".")
+                suggest = posixpath.relpath(dest.relative_to(source.root).as_posix(), rel.parent.as_posix() or ".")
                 warns.append(f"line {prose.count(chr(10), 0, m.start()) + 1}: '{tok}' names another doc without a link; use [Title]({suggest})")
                 break
     return errs, warns
@@ -675,12 +702,10 @@ def table_errors(text: str, cfg: dict, read_src) -> list[str]:
     limit = cfg.get("inline_table_max_rows", DEFAULT_INLINE_ROWS)
     stripped = TABLE_BLOCK_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
     stripped = CL_BLOCK_RE.sub(lambda m: "\n" * m.group(0).count("\n"), stripped)
-    lines, in_fence, i = stripped.splitlines(), False, 0
+    lines, i = mask_for_links(stripped).splitlines(), 0
     while i < len(lines):
         ln = lines[i].strip()
-        if ln.startswith("```"):
-            in_fence = not in_fence
-        elif not in_fence and ln.startswith("|") and i + 1 < len(lines) and SEP_RE.match(lines[i + 1].strip()):
+        if ln.startswith("|") and i + 1 < len(lines) and SEP_RE.match(lines[i + 1].strip()):
             j = i + 2
             while j < len(lines) and lines[j].strip().startswith("|"):
                 j += 1

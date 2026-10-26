@@ -261,6 +261,175 @@ def s_links():
     check("lint passes once links are valid (warnings allowed)", rc == 0, out)
 
 
+def s_staged_source():
+    """The real pre-commit hook must validate the commit, regardless of disk-only edits."""
+    project = CTX['root'] / 'staged-boundary'
+    tool('new_project.py', '--name', project.name, '--description', 'Staged boundary test', '--no-prompt', cwd=CTX['root'])
+
+    def local(name, *args):
+        return tool(name, *args, cwd=project)
+
+    def repo(*args):
+        return sh(['git', *args], cwd=project)
+
+    def stamp(rel):
+        return local('docs_stamp.py', rel, '--by', 'human', '--summary', 'Boundary regression')
+
+    def commit_staged():
+        return repo('commit', '--allow-empty', '-qm', 'Exercise the staged hook')
+
+    def restore():
+        repo('restore', '--source=HEAD', '--staged', '--worktree', '.')
+
+    local('docs_new.py', 'docs/target.md', '--type', 'reference', '--title', 'Target', '--by', 'human')
+    local('docs_new.py', 'docs/source.md', '--type', 'reference', '--title', 'Source', '--by', 'human')
+    source, target = project / 'docs/source.md', project / 'docs/target.md'
+    source.write_text(source.read_text().replace('## Change Log', '[Target](target.md#target)\n\n## Change Log'))
+    stamp('docs/source.md')
+    repo('add', '-A')
+    rc, out = commit_staged()
+    check('staged source fixture commits through the real hook', rc == 0, out)
+
+    source.write_text(source.read_text().replace('target.md#target', 'untracked.md'))
+    (project / 'docs/untracked.md').write_text('# Disk-only target\n')
+    stamp('docs/source.md'); repo('add', 'docs/source.md')
+    rc, out = commit_staged()
+    check('staged hook rejects a disk-only link target', rc != 0 and 'target not found: untracked.md' in out, out)
+    restore(); (project / 'docs/untracked.md').unlink()
+
+    repo('rm', '--cached', 'docs/target.md')
+    rc, out = commit_staged()
+    check('staged deletion checks incoming links even when the file remains on disk', rc != 0 and 'target not found: target.md' in out, out)
+    restore()
+
+    source.write_text(source.read_text().replace('target.md#target', 'Target.md'))
+    stamp('docs/source.md'); repo('add', 'docs/source.md')
+    rc, out = commit_staged()
+    check('staged target lookup preserves exact letter case', rc != 0 and 'target not found: Target.md' in out, out)
+    restore()
+
+    source.write_text(source.read_text().replace('target.md#target', 'target.md#disk-only'))
+    stamp('docs/source.md'); repo('add', 'docs/source.md')
+    target.write_text(target.read_text() + '\n## Disk only\n')
+    rc, out = commit_staged()
+    check('staged anchor validation ignores unstaged target headings', rc != 0 and "anchor '#disk-only' not found" in out, out)
+    restore()
+
+    target.write_text(target.read_text().replace('# Target', '# Renamed', 1))
+    stamp('docs/target.md'); repo('add', 'docs/target.md')
+    rc, out = commit_staged()
+    check('staged heading changes validate unchanged incoming links', rc != 0 and "anchor '#target' not found" in out, out)
+    restore()
+
+    readme = project / 'README.md'
+    readme.write_text(readme.read_text().replace('  - [Source]', '  - [Wrong title]', 1))
+    stamp('README.md'); repo('add', 'README.md')
+    readme.write_text(repo('show', 'HEAD:README.md')[1])
+    rc, out = commit_staged()
+    check('staged README index cannot be hidden by a corrected working copy', rc != 0 and 'index block is out of date' in out, out)
+    restore()
+
+    cfg = project / '.docs.yaml'
+    good_config = cfg.read_text()
+    for bad, needle in [('timezone: Invalid/Zone\n', 'unknown timezone'), ('- not a mapping\n', 'YAML mapping'), ('bad: [\n', 'invalid project YAML')]:
+        cfg.write_text(bad); repo('add', '.docs.yaml'); cfg.write_text(good_config)
+        rc, out = commit_staged()
+        check('staged config rejects ' + needle, rc != 0 and needle in out and 'Traceback' not in out, out)
+        restore()
+
+    source.write_text(source.read_text() + '\nA valid staged edit.\n')
+    stamp('docs/source.md'); repo('add', 'docs/source.md')
+    target.unlink(); readme.unlink(); cfg.unlink()
+    rc, out = commit_staged()
+    check('staged hook uses indexed documents, README and config despite conflicting disk edits', rc == 0, out)
+    restore()
+
+    # A merge conflict and a missing staged config fail closed with useful diagnostics.
+    blob = repo('rev-parse', 'HEAD:docs/target.md')[1].strip()
+    repo('update-index', '--force-remove', 'docs/target.md')
+    env = dict(os.environ, **GIT_ENV)
+    subprocess.run(['git', 'update-index', '--index-info'], cwd=project, env=env,
+                   input=f'100644 {blob} 1\tdocs/target.md\n100644 {blob} 2\tdocs/target.md\n', text=True, check=True)
+    rc, out = local('docs_lint.py', '--staged')
+    check('staged merge conflicts fail closed without a traceback', rc == 1 and 'unresolved merge entry' in out, out)
+    restore()
+    repo('rm', '--cached', '.docs.yaml')
+    rc, out = commit_staged()
+    check('staged hook rejects an unstaged-only project config', rc != 0 and '.docs.yaml is missing' in out, out)
+    restore()
+
+
+def s_markdown_fences():
+    """Exercise the shared scanner through stamping, lint, heading/move rewrites and bridge imports."""
+    root = CTX['root'] / 'fences-sandbox'
+    source, vault, home = root / 'source', root / 'vault', root / 'state'
+    source.mkdir(parents=True)
+    for name in ('_tools', '_template'):
+        shutil.copytree(CTX['root'] / name, source / name, ignore=shutil.ignore_patterns('__pycache__'))
+    project = source / 'fences'
+
+    def local(name, *args):
+        return sh(['uv', 'run', '--quiet', str(source / '_tools' / name), *map(str, args)], cwd=project if project.exists() else source)
+
+    def bridge(*args):
+        return local('icloud_bridge.py', '--config', home / 'config.json', *args)
+
+    def commit_all():
+        sh(['git', 'add', '-A'], cwd=project)
+        return sh(['git', 'commit', '-qm', 'Fence regression fixture'], cwd=project)
+
+    local('new_project.py', '--name', 'fences', '--description', 'Fence regression', '--no-prompt')
+    local('docs_new.py', 'docs/fenced.md', '--type', 'reference', '--title', 'Fenced', '--by', 'human')
+    note = project / 'docs/fenced.md'
+    example = ('````md\n```\n## Example heading\n[Missing](missing.md)\n- [ ] Example task\n'
+               '~~~\n```` trailing text\n- [ ] Still example\n`````\n\n'
+               '~~~~md\n~~~\n## Tilde example\n[Missing](also-missing.md)\n- [ ] Tilde task\n~~~~\n')
+    body = (example + '\n## Real heading\n\n[Real](#real-heading)\n- [ ] Real task\n\n'
+            '## Repeated\n\n## Repeated\n\n[Second](#repeated-1)\n\n'
+            '```unclosed\n## Hidden tail\n[Missing](tail.md)\n- [ ] Hidden task\n')
+    original = note.read_text()
+    front = original.split('\n---\n', 1)[0] + '\n---\n'
+    note.write_text(front + '# Fenced\n\nCafé offset test.\n\n' + body + '\n' + original[original.index('## Change Log'):])
+    # Keep the changelog outside an unclosed fence; use a separate doc for the unclosed case.
+    note.write_text(note.read_text().replace('```unclosed\n## Hidden tail\n[Missing](tail.md)\n- [ ] Hidden task\n', ''))
+    rc, out = local('docs_stamp.py', 'docs/fenced.md', '--toc', '--by', 'human', '--summary', 'Add fenced examples')
+    text = note.read_text()
+    check('TOC ignores short, mismatched and non-closing fences', rc == 0 and example in text
+          and '- [Real heading](#real-heading)' in text
+          and '- [Example heading]' not in text and '- [Tilde example]' not in text and '- [Repeated](#repeated-1)' in text, out)
+    rc, out = local('docs_lint.py', 'docs/fenced.md')
+    check('link lint shares the TOC fence policy', rc == 0 and 'target not found' not in out, out)
+    rc, out = local('docs_mv.py', 'heading', 'docs/fenced.md', 'Real heading', 'Renamed heading', '--by', 'human')
+    check('heading rename keeps offsets and fenced bytes intact', rc == 0 and example in note.read_text()
+          and '[Real](#renamed-heading)' in note.read_text(), out)
+    local('docs_new.py', 'docs/ref.md', '--type', 'reference', '--title', 'Reference', '--by', 'human')
+    ref = project / 'docs/ref.md'
+    ref.write_text(ref.read_text().replace('## Change Log', '[Link](fenced.md#renamed-heading)\n\n````md\n```\n[Example](fenced.md)\n````\n\n## Change Log'))
+    local('docs_stamp.py', 'docs/ref.md', '--by', 'human', '--summary', 'Link the example')
+    rc, out = local('docs_mv.py', 'mv', 'docs/fenced.md', 'docs/moved.md', '--by', 'human')
+    note = project / 'docs/moved.md'
+    check('file moves rewrite prose links without touching nested code examples', rc == 0
+          and '[Link](moved.md#renamed-heading)' in ref.read_text() and '[Example](fenced.md)' in ref.read_text(), out)
+    local('docs_new.py', 'docs/unclosed.md', '--type', 'reference', '--title', 'Unclosed', '--by', 'human')
+    unclosed = project / 'docs/unclosed.md'
+    unclosed.write_text(unclosed.read_text() + '\n```unclosed\n## Hidden tail\n[Missing](tail.md)\n- [ ] Hidden task\n')
+    local('docs_stamp.py', 'docs/unclosed.md', '--toc', '--by', 'human', '--summary', 'Unclosed example')
+    rc, out = local('docs_lint.py')
+    check('an unclosed code fence masks the rest of the document', rc == 0 and '- [Hidden tail]' not in unclosed.read_text(), out)
+    note.write_bytes(note.read_text().replace('\n', '\r\n').encode())
+    rc, out = commit_all()
+    check('nested-fence documents commit through the real hook', rc == 0, out)
+    rc, out = bridge('setup', '--source', source, '--vault', vault, '--notifications', 'off', '--no-schedule')
+    view = vault / '_Folderwise Tasks/fences.md'
+    text = view.read_text() if view.exists() else ''
+    check('bridge task discovery uses the same nested and unclosed fence policy', rc == 0 and 'Real task' in text
+          and all(s not in text for s in ('Example task', 'Still example', 'Tilde task', 'Hidden task')), out)
+    view.write_text(text.replace('- [ ] Real task', '- [x] Real task'))
+    rc, out = bridge('sync')
+    check('bridge applies the real task at its CRLF source line without changing fenced examples', rc == 0
+          and b'- [x] Real task\r\n' in note.read_bytes() and example in note.read_text(), out)
+
+
 def s_toc():
     rc, out = tool("docs_stamp.py", "docs/guide.md", "--toc", "--by", "human", "--summary", "toc")
     t = read("docs/guide.md")
@@ -1767,6 +1936,58 @@ def s_ibridge_isolation():
     rc, out = invoke('sync')
     check('the project resumes after the inventory problem is fixed', rc == 0 and (vault / 'delta/docs/checklist.md').exists(), out)
 
+    # Discovery/config failures stay project-local, including disabled projects.
+    original_config = (alpha / '.docs.yaml').read_text()
+    alpha_export = (vault / 'alpha/docs/checklist.md').read_bytes()
+    for index, invalid in enumerate(('timezone: Invalid/Zone\n', 'folderwise-ibridgesync: maybe\n', '- invalid mapping\n', 'bad: [\n')):
+        (alpha / '.docs.yaml').write_text(invalid)
+        late = beta / f'docs/config-isolation-{index}.md'
+        local('docs_new.py', late.relative_to(beta), '--type', 'plan', '--title', 'Healthy export', '--by', 'human', cwd=beta)
+        commit(beta, 'Healthy project advances during invalid config')
+        before_run = json.loads((home / 'last-run.json').read_text())['last_run_epoch']
+        rc, out = invoke('sync')
+        status = (vault / '_folderwise-sync-status.md').read_text()
+        check('config isolation preserves healthy exports: ' + invalid.split(':')[0].strip(), rc == 1
+              and (vault / 'beta' / late.relative_to(beta)).is_file()
+              and (vault / 'alpha/docs/checklist.md').read_bytes() == alpha_export
+              and 'Paused projects: alpha.' in status and 'Traceback' not in out
+              and json.loads((home / 'last-run.json').read_text())['last_run_epoch'] > before_run, out)
+    (alpha / '.docs.yaml').write_text(original_config)
+    rc, out = invoke('sync')
+    check('a project resumes after repairing its config', rc == 0 and 'Paused projects' not in (vault / '_folderwise-sync-status.md').read_text(), out)
+    cfg_path = alpha / '.docs.yaml'
+    outside_config = root / 'linked-config.yaml'; outside_config.write_text(original_config)
+    cfg_path.unlink(); cfg_path.symlink_to(outside_config)
+    rc, out = invoke('sync')
+    check('a symlink project config pauses only its project', rc == 1 and 'Paused projects: alpha.' in (vault / '_folderwise-sync-status.md').read_text(), out)
+    outside_config.unlink()
+    rc, out = invoke('sync')
+    check('a dangling config symlink preserves the previous project export', rc == 1
+          and (vault / 'alpha/docs/checklist.md').read_bytes() == alpha_export
+          and 'symlink project config' in out, out)
+    cfg_path.unlink(); cfg_path.write_text(original_config)
+    invoke('sync')
+
+    # A hook that changes the live repository cannot publish its disposable clone.
+    hook = alpha / '.git/hooks/pre-commit'
+    original_hook = hook.read_bytes()
+    saved_hook = root / 'original-pre-commit'; saved_hook.write_bytes(original_hook); saved_hook.chmod(0o755)
+    scratch = alpha / 'concurrent.txt'
+    hook.write_text('#!' + sys.executable + '\nimport subprocess\nfrom pathlib import Path\n'
+                    + f'subprocess.run([{str(saved_hook)!r}], check=True)\nPath({str(scratch)!r}).write_text("Concurrent Mac edit")\n')
+    wanted = views['alpha'].read_text().replace('- [x] A1 task', '- [ ] A1 task')
+    views['alpha'].write_text(wanted)
+    before_head = head(alpha)
+    rc, out = invoke('sync')
+    check('shared transaction refuses a concurrent live edit and removes its clone', rc == 1 and 'changed during transaction' in out
+          and head(alpha) == before_head and views['alpha'].read_text() == wanted and not (home / 'work/alpha').exists(), out)
+    hook.write_bytes(original_hook); scratch.unlink()
+    rc, out = invoke('sync')
+    check('shared transaction retries the preserved edit after the race clears', rc == 0 and '- [ ] A1 task' in notes['alpha'].read_text(), out)
+    # Restore the state expected by the following plan scenario.
+    views['alpha'].write_text(views['alpha'].read_text().replace('- [ ] A1 task', '- [x] A1 task'))
+    invoke('sync')
+
     # plan previews pending phone edits without changing anything.
     views['alpha'].write_text(views['alpha'].read_text().replace('- [x] A1 task', '- [ ] A1 task'))
     views['beta'].write_text(views['beta'].read_text().replace('B1 task', 'B1 renamed'))
@@ -1778,6 +1999,16 @@ def s_ibridge_isolation():
           and 'B1 renamed' in views['beta'].read_text() and not (home / 'export.json').exists(), out)
     rc, out = invoke('sync')
     check('the planned edits apply on the next sync', '- [ ] A1 task' in notes['alpha'].read_text() and 'B1 renamed' not in views['beta'].read_text(), out)
+
+    # Bridge-wide files must not create a fictitious paused project called None.
+    dashboard = vault / 'Tasks.md'
+    original_dashboard = dashboard.read_bytes()
+    dashboard.write_text(dashboard.read_text() + '\nUnowned phone prose\n')
+    rc, out = invoke('sync')
+    check('bridge-wide phone edits are preserved and reported without a project-name crash', rc == 1
+          and 'Tasks.md:' in out and 'Traceback' not in out and 'Unowned phone prose' in dashboard.read_text(), out)
+    dashboard.write_bytes(original_dashboard)
+    invoke('sync')
 
     # The default notification mode stays quiet about imports.
     invoke('configure', '--notifications', 'errors')
@@ -1921,7 +2152,7 @@ def s_ibridge_setup():
 
 SECTIONS = [
     ("create", s_create), ("new_doc", s_new_doc_and_index), ("stamp", s_stamp_and_hook), ("hook", s_hook_fail_closed),
-    ("lint", s_lint_rules), ("timezone", s_timezone), ("links", s_links), ("toc", s_toc), ("mv", s_mv),
+    ("lint", s_lint_rules), ("timezone", s_timezone), ("links", s_links), ("staged_source", s_staged_source), ("markdown_fences", s_markdown_fences), ("toc", s_toc), ("mv", s_mv),
     ("tables", s_tables), ("stale", s_stale_index_recent), ("sync", s_sync),
     ("ibridge", s_ibridge), ("ibridge_rename", s_ibridge_rename), ("ibridge_isolation", s_ibridge_isolation), ("ibridge_setup", s_ibridge_setup), ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache),
     ("framework_checkout", s_framework_checkout), ("framework_index", s_framework_index), ("ci_allowlist", s_ci_allowlist),

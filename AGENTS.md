@@ -21,6 +21,7 @@ The root `.gitignore` is an allowlist. Never add knowledge projects, caches, cre
   - `sync_rules.py` — push the template's shared rules, hook and config files (`.vscode/*`, `.markdownlint.json`, `_doc-template.md`) into all projects (`--check` for drift)
   - `icloud_bridge.py` — selective iCloud mirror, centralized Obsidian task views, boolean imports, local commits and optional macOS scheduling/notifications
   - `framework_checkout.py` — preview/enable a minimal pull-only clone, update it, or restore the full checkout
+  - `docsource.py` — shared working-tree/Git-index reader for lint and README catalogue checks
   - `selftest.py` — automated self-test of all the tools in an isolated temp copy (about 15 seconds)
 - `uv.toml` — portable uv defaults; no machine-specific paths. Optional `UV_CACHE_DIR` is local to the environment, not committed.
 - `_tools/framework_guard.py` — validates the public framework index; `_tools/framework-hooks/` contains root hooks.
@@ -37,7 +38,7 @@ The root `.gitignore` is an allowlist. Never add knowledge projects, caches, cre
 
 ## Changing the tools or template (verification required)
 - Before editing anything in `_tools/` or `_template/`, make sure no other session is editing them (one writer at a time). Snapshot shared inputs and check for concurrent changes before deploying a release.
-- Run `uv run _tools/selftest.py` before you start (to know the baseline) and again when you finish. It must report all checks passed. Use `-k <section>` while iterating (sections: create, new_doc, stamp, hook, lint, timezone, links, toc, mv, tables, stale, sync, doctor, layout, cli_errors, failure_paths, uv_cache, framework_checkout, ibridge, ibridge_rename, ibridge_isolation, ibridge_setup, framework_index, ci_allowlist).
+- Run `uv run _tools/selftest.py` before you start (to know the baseline) and again when you finish. It must report all checks passed. Use `-k <section>` while iterating (sections: create, new_doc, stamp, hook, lint, timezone, links, staged_source, markdown_fences, toc, mv, tables, stale, sync, doctor, layout, cli_errors, failure_paths, uv_cache, framework_checkout, ibridge, ibridge_rename, ibridge_isolation, ibridge_setup, framework_index, ci_allowlist).
 - Every new tool, setting or behaviour gets a check in `_tools/selftest.py` and an entry in the public documentation: keep README.md concise and place detailed commands/configuration in docs/guide.md (`uv run .github/scripts/test_public_docs.py` checks both in the full development checkout and fails if a tool or `.docs.yaml` setting is undocumented) in the same change. Run that public-documentation check alongside the self-test before submitting. A tool change without passing checks is not done.
 - When managed template rules change, sync them into affected projects only with the owner's authorization, then validate and commit in each independent project repository. Publishing the framework alone does not authorize modifying knowledge projects.
 - The pre-commit hook fails closed: if a project cannot find `../_tools` or `uv`, its commits are blocked (`DOCS_SKIP_HOOK=1` bypasses once, only when the user says so).

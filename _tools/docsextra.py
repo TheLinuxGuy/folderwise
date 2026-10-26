@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 import docslib as dl
+from docsource import DocumentSource
 
 BYLINE_START, BYLINE_END = "<!-- byline:start -->", "<!-- byline:end -->"
 BYLINE_RE = re.compile(r"\n*" + re.escape(BYLINE_START) + r"(.*?)" + re.escape(BYLINE_END) + r"\n*", re.S)
@@ -68,13 +69,14 @@ def placeholder_warnings(meta: dict | None, text: str) -> list[str]:
 
 # --- catalogue + README index ----------------------------------------------
 
-def catalogue(root: Path, cfg: dict, readme_name: str = "README.md") -> list[dict]:
+def catalogue(root: Path, cfg: dict, readme_name: str = "README.md", source: DocumentSource | None = None) -> list[dict]:
+    source = source if source is not None else DocumentSource(root)
     rows = []
-    for rel in dl.iter_docs(root, cfg):
+    for rel in source.docs(cfg):
         if rel.as_posix() == readme_name:
             continue
         try:
-            meta, _ = dl.split_front_matter((root / rel).read_text())
+            meta, _ = dl.split_front_matter(source.read(rel.as_posix()))
         except Exception:
             continue
         if meta:
@@ -83,8 +85,8 @@ def catalogue(root: Path, cfg: dict, readme_name: str = "README.md") -> list[dic
     return rows
 
 
-def index_entries(root: Path, cfg: dict) -> str:
-    rows = catalogue(root, cfg)
+def index_entries(root: Path, cfg: dict, source: DocumentSource | None = None) -> str:
+    rows = catalogue(root, cfg, source=source)
     if not rows:
         return "No docs yet."
     out, last_dir = [], None
@@ -140,16 +142,16 @@ def refresh_readme_index(root: Path, cfg: dict, by: str, summary: str, stamp: bo
     return True
 
 
-def index_errors(root: Path, cfg: dict, readme: str = "README.md") -> list[str]:
-    path = root / readme
-    if not path.is_file():
+def index_errors(root: Path, cfg: dict, readme: str = "README.md", source: DocumentSource | None = None) -> list[str]:
+    source = source if source is not None else DocumentSource(root)
+    if not source.is_file(readme):
         return []
     try:
-        _, body = dl.split_front_matter(path.read_text())
+        _, body = dl.split_front_matter(source.read(readme))
     except Exception:
         return []
     m = INDEX_RE.search(body)
-    if m and m.group(1).strip() != index_entries(root, cfg):
+    if m and m.group(1).strip() != index_entries(root, cfg, source):
         return [f"{readme}: index block is out of date (run docs_index.py --write --by ... --summary ...)"]
     return []
 
