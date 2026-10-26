@@ -8,6 +8,7 @@
 Installation self-tests run separately and need no public README or docs/ directory.
 Missing public documentation is an error here, never an optional skipped check.
 """
+import ast
 import os
 import re
 import shlex
@@ -40,6 +41,67 @@ def public_documentation() -> list[tuple[str, str]]:
         raise ValueError("README must link to docs/guide.md")
     docs.append(("docs/guide.md", guide.read_text()))
     return docs
+
+
+IBRIDGE_DOC = "docs/ibridge-testing.md"
+MARKER = re.compile(r"\b(?:manual only|gap)\b", re.I)
+
+
+def selftest_inventory(source: str) -> tuple[set[str], list[str]]:
+    """Static view of _tools/selftest.py: the literal check labels, and the `-k` section names.
+
+    A label is the first string argument of check(...) or of any helper whose first parameter is named `label`
+    (selftest.py's local `rejected(label, ...)` helpers). Parsed, never executed, so it is fast and deterministic."""
+    tree = ast.parse(source)
+    callers = {"check"} | {n.name for n in ast.walk(tree)
+                            if isinstance(n, ast.FunctionDef) and n.args.args and n.args.args[0].arg == "label"}
+    labels = {n.args[0].value for n in ast.walk(tree)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in callers
+              and n.args and isinstance(n.args[0], ast.Constant) and isinstance(n.args[0].value, str)}
+    sections: list[str] = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "SECTIONS" for t in n.targets):
+            sections = [e.elts[0].value for e in n.value.elts
+                        if isinstance(e, ast.Tuple) and e.elts and isinstance(e.elts[0], ast.Constant)]
+    return labels, sections
+
+
+def scenario_rows(doc: str) -> list[list[str]]:
+    """Rows (cells) of the table under the '## Traceability table' heading whose first cell is a scenario ID like R4."""
+    m = re.search(r"^## Traceability table\s*$(.*?)(?=^## |\Z)", doc, re.M | re.S)
+    rows = []
+    for line in (m.group(1) if m else "").splitlines():
+        if line.lstrip().startswith("|"):
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if re.fullmatch(r"[A-Z]\d+", cells[0]):
+                rows.append(cells)
+    return rows
+
+
+def ibridge_doc_problems(doc: str, selftest_source: str) -> tuple[list[str], list[str], int]:
+    """(problems, gap scenario IDs, scenario count) for the bridge testing page versus the self-test source."""
+    labels, sections = selftest_inventory(selftest_source)
+    rows = scenario_rows(doc)
+    problems = [] if rows else ["no scenario rows under '## Traceability table'"]
+    ids = [r[0] for r in rows]
+    problems += [f"duplicate scenario ID {i}" for i in sorted({i for i in ids if ids.count(i) > 1})]
+    gaps = []
+    for r in rows:
+        if len(r) < 4:
+            problems.append(f"{r[0]}: expected 4 columns (ID, scenario, automated checks, real device), found {len(r)}")
+            continue
+        cited = re.findall(r"`([^`]+)`", r[2])
+        words = re.sub(r"`[^`]*`", "", r[2])  # a marker is prose, never part of a cited label
+        problems += [f"{r[0]}: unknown self-test check label '{c}'" for c in cited if c not in labels]
+        if not cited and not MARKER.search(words):
+            problems.append(f"{r[0]}: no automated check cited and no 'Manual only' or 'Gap' marker")
+        if re.search(r"\bgap\b", words, re.I):
+            gaps.append(r[0])
+    bridge_sections = [s for s in sections if s.startswith("ibridge")]
+    if not bridge_sections:
+        problems.append("no ibridge sections found in _tools/selftest.py SECTIONS")
+    problems += [f"self-test section '{s}' is not mentioned in backticks" for s in bridge_sections if f"`{s}`" not in doc]
+    return problems, gaps, len(rows)
 
 
 def s_docs_coverage():
@@ -121,8 +183,25 @@ def s_readme_commands():
             check(f"{name} in-page link resolves: #{a}", a in anchors)
 
 
+def s_ibridge_testing():
+    """The bridge test-case page must exist and stay in step with the self-tests it cites (labels, sections, table)."""
+    selftest = SRC_TOOLS / "selftest.py"
+    if not selftest.is_file():
+        print("SKIP bridge test-case page: _tools/selftest.py is not in this checkout")
+        return
+    doc_path = SRC_TOOLS.parent / IBRIDGE_DOC
+    check(f"{IBRIDGE_DOC} exists", doc_path.is_file(), str(doc_path))
+    if not doc_path.is_file():
+        return
+    problems, gaps, n = ibridge_doc_problems(doc_path.read_text(), selftest.read_text())
+    check(f"{IBRIDGE_DOC} traceability table cites only existing self-test checks, covers every ibridge section and "
+          f"gives each of its {n} scenarios a check or a marker", not problems, "\n".join(problems))
+    for g in gaps:
+        print(f"WARN {IBRIDGE_DOC}: scenario {g} is marked Gap (no self-test yet)")
+
+
 def main():
-    for fn in (s_docs_coverage, s_readme_commands):
+    for fn in (s_docs_coverage, s_readme_commands, s_ibridge_testing):
         try:
             fn()
         except Exception as exc:
