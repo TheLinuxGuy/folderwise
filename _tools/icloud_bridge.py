@@ -779,7 +779,10 @@ def conflict_copies(vault, keys):
     """Unmanaged siblings iCloud may have created beside managed files (for example 'note 2.md')."""
     folders = {}
     for key in keys:
-        folders.setdefault(safe(vault, key).parent, []).append(safe(vault, key))
+        try:
+            folders.setdefault(safe(vault, key).parent, []).append(safe(vault, key))
+        except ValueError:
+            continue  # a symlinked or unsafe path is reported as its own issue; it must not hide the report
     found = set()
     for folder, managed in folders.items():
         if not folder.is_dir():

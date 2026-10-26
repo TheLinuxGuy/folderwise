@@ -2307,7 +2307,7 @@ def s_ibridge_status():
             problems.append(f'rc {rc} != {rc_expected}')
         if rc_expected == 0 and section(text, 'Issues') != 'None.':
             problems.append('Issues is not None.')
-        problems += [f'issue missing: {s}' for s in issues if not any(s in b for b in listed)]
+        problems += [f'issue missing: {s} (report lists {listed})' for s in issues if not any(s in b for b in listed)]
         problems += [f'report missing: {s}' for s in present if s not in text]
         problems += [f'report has: {s}' for s in absent if s in text]
         if command == 'sync' and listed != [line[6:] for line in out.splitlines() if line.startswith('ERROR ')]:
