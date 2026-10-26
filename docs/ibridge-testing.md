@@ -16,6 +16,9 @@ The [traceability table](#traceability-table) links every manual scenario to the
 | `ibridge` | The core: export and dashboard, phone toggles for Markdown and CSV-backed tasks, idempotence, dirty-project and hook failures, lean mode, adapters, schedule and notification plumbing, journal recovery, status report. |
 | `ibridge_rename` | Opt-in task renames from the phone: the setting, accepted renames, every rejected shape, Mac-side conflicts, copied-note edits, CSV adapters, iCloud conflict copies. |
 | `ibridge_isolation` | One project's problem pausing only that project, the `plan` preview of phone edits, the `resolve` command, and notification modes. |
+| `ibridge_notes` | Opt-in phone text edits to copied notes: the two switches, patterns, quiet period, protected regions, limits, Mac conflicts, CRLF, recovery. |
+| `ibridge_transient` | A brief iCloud file lock (`EDEADLK`) is retried quietly and the third consecutive failure is reported. |
+| `ibridge_status` | The status report as source of truth: a mocked transport drives about 50 scenarios (successes, rejections, pauses, bridge-wide freezes, iCloud artefacts, report ownership, doctor) and each is judged by the report, the CLI output, `last-run.json`, alert counts and report privacy. |
 | `ibridge_setup` | Setup, enrollment, future-project defaults, uninstall and schedule lifecycle. |
 
 ## Real-iPhone acceptance checklist
@@ -118,6 +121,13 @@ Goal: prove that an edit the bridge does not support is contained, reported once
 2. Switch with `uv run _tools/icloud_bridge.py configure --notifications imports`; the next run that applies phone edits sends one note with counts only (for example "Folderwise applied 2 phone change(s) in 1 project(s)") and no task or document text. If the same run needs attention, only the attention alert is sent.
 3. Switch to `off`; nothing is sent, including the enable announcement. Restore your intended mode afterwards.
 
+### 9. Opt-in note edit test
+
+1. Turn the switch on (`configure --text-edits on`), add a `folderwise-ibridgeedit` pattern for one fictional note and commit it.
+2. On the phone, add a sentence to that note. Expect no commit until the note has been unchanged for the quiet period across two runs (`plan` shows `PHONE EDIT WAITING`, the status report lists the note under **Phone edits waiting**).
+3. After the quiet period the next run commits "Update notes from Obsidian" with `Bridge-Ops: … text-edit=1`; the stamped note, with a new Change Log row, returns to the phone; the report's **Recent imports** shows the count under *Edited*.
+4. Try an edit the bridge must refuse (change the Change Log, or empty the note): the project pauses, the note is named in the report, and `resolve "<path>"` restores the Mac version.
+
 ### Notification caveat
 
 A successful notification request is **not** proof that a banner was visible. Screen capture, iPhone Mirroring, Screen Sharing, a computer-use assistant, or a Focus mode can make macOS keep the notification in Notification Center without showing it. The bridge reports "Notification requested", not "shown". For acceptance:
@@ -125,6 +135,17 @@ A successful notification request is **not** proof that a banner was visible. Sc
 - Treat `notification_sent` and the log as proof of the request, and a screenshot of the actual banner as proof of visibility.
 - If no banner appears, end the capture or sharing session, or check Focus and the app's notification permissions, then try again. See [the notification visibility guide](obsidian.md#a-notification-appears-only-in-notification-center).
 - **Never silently change a global privacy setting** (for example allowing notifications while the display is shared or mirrored). Doing so can expose other apps' private messages. If you choose it for a test, do it consciously, say so in the report, and restore it.
+
+## What CI cannot test
+
+CI mocks the iCloud transport with plain file copies between the Mac source and the vault and assumes the real transport always works. The `ibridge_status` section then judges every outcome by `_folderwise-sync-status.md`. These stay manual:
+
+- Real iCloud delivery time, ordering, eviction (`.icloud` placeholders) and the real names iCloud gives conflict copies (CI mocks `note 2.md` and `note (conflicted copy).md`).
+- Whether a macOS notification banner is actually visible (Focus, screen sharing and mirroring can suppress it). CI checks the request and that its text carries no task or document content.
+- Real launchd scheduling and Login Items (CI uses fake `launchctl` and `open` programs).
+- Obsidian and Tasks-plugin behavior on the phone (the edit dialog, suggestion popups, Properties-editor rewrites) and iPhone Mirroring input. CI mocks these as file edits.
+- Concurrent phone and Mac writes inside a single run; CI covers deterministic orderings only.
+- Bridge-level configuration errors, which cannot be written to the status report; they appear on the command line and in `doctor`.
 
 ## Findings from real runs
 
@@ -138,7 +159,7 @@ These came from a real fictional-data acceptance run on a Mac and iPhone. Tests 
 
 ## Traceability table
 
-Each row is a scenario from the checklist. **Automated checks** are exact labels from `_tools/selftest.py` (sections `ibridge`, `ibridge_rename`, `ibridge_isolation`, `ibridge_setup`). **Manual only** means no software check can prove it; the third column says what a real device must still confirm. **Gap** means the behavior is automatable but has no self-test yet; it is a to-do, not an accepted state.
+Each row is a scenario from the checklist. **Automated checks** are exact labels from `_tools/selftest.py` (sections `ibridge`, `ibridge_rename`, `ibridge_isolation`, `ibridge_notes`, `ibridge_transient`, `ibridge_status`, `ibridge_setup`). **Manual only** means no software check can prove it; the third column says what a real device must still confirm. **Gap** means the behavior is automatable but has no self-test yet; it is a to-do, not an accepted state.
 
 | ID | Scenario | Automated checks | Needs a real device or person |
 | --- | --- | --- | --- |
@@ -185,8 +206,28 @@ Each row is a scenario from the checklist. **Automated checks** are exact labels
 | N1 | Notification modes: errors, imports (counts only), off | `setup accepts the imports notification mode`<br>`unknown notification modes are rejected`<br>`errors mode does not announce routine imports`<br>`imports notify with counts only` | None |
 | N2 | `notify-test` and the setup replay request a notification honestly | `notification app bundles the Folderwise identity and icon`<br>`notification app launches and clears the message handoff`<br>`notification test distinguishes a request from visible delivery`<br>`one-command setup notification replay uses the configured interval`<br>`notification failure is reported by the explicit test command` | Whether a banner is actually seen (see N3) |
 | N3 | A notification banner is visible on the Mac desktop | Manual only | Real macOS presentation; screen capture, mirroring and Focus can suppress it; never change global privacy settings silently |
-| I1 | A transient iCloud lock such as `[Errno 11] Resource deadlock avoided` is retried quietly and only the third consecutive failure alerts | Gap | Not needed once a self-test injects the error; real iCloud rarely reproduces it on demand |
+| I1 | A transient iCloud lock such as `[Errno 11] Resource deadlock avoided` is retried quietly and only the third consecutive failure alerts | `the third consecutive lock failure is reported`<br>`a locked run never removes exported files`<br>`a normal run clears the deferral counter` | Real iCloud rarely reproduces the lock on demand |
 | I2 | Mirroring drops a click or types into the wrong line; the operator verifies the phone before the run | Manual only | Operator discipline; the bridge's reaction to a bad edit is covered by U1 and U6 |
+| E1 | Note edits are off until the bridge switch is on, and settings are validated | `phone text edits are refused until the bridge switch is on`<br>`the text edit switch accepts only on or off`<br>`the text edit switch must be a real boolean`<br>`the quiet period cannot be negative`<br>`edit patterns must be a list of project-relative paths`<br>`edit patterns cannot leave the project`<br>`project doctor recognizes folderwise-ibridgeedit`<br>`turning the bridge switch off refuses note edits again` | None |
+| E2 | A phone note edit waits out the quiet period, then commits once with human provenance | `plan says the phone note is waiting for the quiet period`<br>`the first run only notes the edit`<br>`an edit that has not stayed unchanged long enough keeps waiting`<br>`plan previews the note edit that would apply`<br>`a settled phone note edit is committed once`<br>`the note edit has human provenance and counts only`<br>`the stamped note returns to the vault`<br>`an unchanged run after a note edit creates no commit` | The real phone typing and the iCloud delivery |
+| E3 | Patterns reach nested notes and the status report counts the edit | `plan shows nested notes matched by ** patterns`<br>`nested notes matched by ** patterns are imported`<br>`the status report counts the note edit`<br>`notes outside the patterns are still refused`<br>`a project without patterns still refuses note edits` | None |
+| E4 | Front matter and generated blocks are protected; harmless reformatting is ignored | `harmless front matter reformatting is ignored and the Mac front matter is kept`<br>`front matter changes are refused`<br>`front matter cannot be removed from the phone`<br>`broken front matter is refused`<br>`the change log cannot be edited from the phone`<br>`generated-block markers cannot be added` | What Obsidian's Properties editor really rewrites |
+| E5 | Size, shrink and lint limits refuse a bad edit and leave the Mac note unchanged | `a note cannot be emptied`<br>`a note cannot lose more than half its lines`<br>`a very large paste is refused`<br>`a huge rewrite is refused`<br>`a phone edit that fails project lint leaves the Mac note unchanged` | None |
+| E6 | Mac and phone both changed the note, or the phone saved an older copy: the Mac version wins until resolved | `a note edited on both sides is paused with the file named`<br>`resolve keeps the Mac version and resumes the project`<br>`the vault copy follows the newer Mac text`<br>`a phone copy saved from an older export is refused (its change log differs)` | Real stale copies after an offline phone |
+| E7 | Toggles in an editable note stay task imports; a note edit and a task change together pause the project | `toggles in an editable note stay ordinary task imports`<br>`a note edit and a task change in the same note pause the project` | None |
+| E8 | CRLF notes keep their line endings | `a note edit keeps CRLF line endings in the source` | None |
+| S1 | Clean export: report shows no issues; unchanged runs and `plan` leave it byte-for-byte alone | `a clean export reports no issues and its sizes`<br>`the status report is a bridge-owned file with a recorded hash`<br>`an unchanged run leaves the report byte-for-byte alone`<br>`and does not rewrite it`<br>`plan never changes the report`<br>`plan left the report alone` | None |
+| S2 | Successful imports (toggle, rename, note edit, adapter) appear under Recent imports with the commit | `a toggle import is listed`<br>`the listed commit is the import commit`<br>`a rename import adds a second row`<br>`a settled note edit is imported and counted`<br>`an adapter toggle import is listed` | None |
+| S3 | Waiting note edits are listed without failing the run | `a note edit waiting out its quiet period is listed, not failed` | None |
+| S4 | Omissions are listed with sizes and reasons, alert once, and clear when fixed | `a lean mode export lists the files it leaves out and why`<br>`lean mode lists excluded files with the reason`<br>`image budget omissions are listed with sizes and reasons`<br>`an actionable omission alerts`<br>`the same omission is not announced again`<br>`lifting the limit clears the omission` | Real banner (see N3) |
+| S5 | Rejected view edits are named, restored and never echoed; each reason shows in the report | `an added phone line is rejected, restored and named without echoing the text`<br>`the rejected view is restored and nothing was committed`<br>`rejected phone edits send an alert`<br>`typing after a task link is rejected`<br>`a link typed into a title is rejected with its reason`<br>`a title edit is refused when renames are off for the project`<br>`swapped titles are refused`<br>`a pending toggle for a task renamed on the Mac is rejected with that reason` | None |
+| S6 | Project problems pause only that project and the report names it: dirty tree, Git hook, adapter list/apply/validate, oversized note edit, front matter | `a dirty project is paused and named`<br>`fixing the cause clears the pause`<br>`a failing Git hook pauses the project and shows the hook text`<br>`repairing the hook resumes and imports`<br>`an adapter apply failure pauses only the adapter project`<br>`an adapter validate failure pauses only the adapter project`<br>`an adapter list failure pauses the project and keeps its export`<br>`a paused project keeps its previous vault files`<br>`the adapter project imports once the adapter works again`<br>`an over-large note edit is refused and the project paused`<br>`resolve restores the Mac note and the project resumes`<br>`a front matter edit is refused with the file named`<br>`a Mac change to a note with no pending phone edit simply exports` | None |
+| S7 | Bridge-wide problems freeze every export and say why: dashboard edit, interrupted journal, symlink, directory-as-file, disabled project with pending edits | `an edit to the generated dashboard freezes every export`<br>`a frozen run exports nothing new`<br>`restoring the dashboard unfreezes the export`<br>`an interrupted export journal that no longer matches is reported`<br>`removing the journal recovers`<br>`a symlink in the vault is refused and reported`<br>`replacing the symlink with the file recovers`<br>`a directory masquerading as an exported file is reported`<br>`removing the directory restores the export`<br>`disabling a project with a pending phone edit freezes everything with that reason`<br>`enabling the project again imports the preserved edit` | None |
+| S8 | A new source file colliding with an unowned vault file pauses its project and preserves the vault file | `a new source file colliding with an unowned vault file pauses its project`<br>`the colliding vault file is preserved`<br>`removing the collision resumes the project` | None |
+| S9 | Mocked iCloud conflict copies are listed, never imported and left in place | `mock iCloud conflict copies are listed and never imported`<br>`conflict copies are left in place for the user`<br>`deleting the copies clears the section` | How real iCloud names and creates them (see U7) |
+| S10 | The report file is bridge-owned: an edited report or legacy report is never overwritten | `an edited status report is never overwritten and the CLI says why`<br>`restoring the report resumes normal syncing`<br>`an unowned legacy report is flagged in the report and preserved`<br>`removing the legacy report clears the warning` | None |
+| S11 | Source and config problems: unavailable source removes nothing, invalid config stops before export, doctor agrees with the report | `an unavailable source is reported in the status file and removes nothing`<br>`restoring the source recovers`<br>`an invalid bridge config stops before any export and says so on the CLI`<br>`doctor agrees with a clean report`<br>`doctor reports the last issue state`<br>`doctor stays healthy after handled rejections` | Config errors cannot appear in the report (CLI and doctor only) |
+| S12 | Privacy: the report and alerts never contain phone-typed text, source or state paths | `alerts carry no task or document text` | None (every `ibridge_status` scenario also asserts this for the report) |
 
 ## Keeping this page honest
 

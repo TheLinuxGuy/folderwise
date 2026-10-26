@@ -2018,6 +2018,543 @@ def s_ibridge_isolation():
     check('errors mode does not announce routine imports', rc == 0 and bodies().count('phone change') == count, bodies())
 
 
+def s_ibridge_notes():
+    """Opt-in phone text edits to copied notes: gates, quiet period, merge safety, protected regions and recovery."""
+    root = CTX['root'] / 'notes-sandbox'
+    source, vault, home = root / 'source', root / 'vault', root / 'state'
+    source.mkdir(parents=True)
+    for name in ('_tools', '_template'):
+        shutil.copytree(CTX['root'] / name, source / name, ignore=shutil.ignore_patterns('__pycache__'))
+    conf = home / 'config.json'
+
+    def invoke(*args):
+        return tool('icloud_bridge.py', '--config', conf, *args)
+
+    def local(name, *args, cwd=None):
+        return sh(['uv', 'run', '--quiet', str(source / '_tools' / name), *map(str, args)], cwd=cwd or source)
+
+    def commit(project, message):
+        sh(['git', 'add', '-A'], cwd=project)
+        return sh(['git', 'commit', '-qm', message], cwd=project)
+
+    def head():
+        return sh(['git', 'rev-parse', 'HEAD'], cwd=alpha)[1]
+
+    for name in ('alpha', 'beta'):
+        rc, out = local('new_project.py', '--name', name, '--description', 'Fictional note edit test', '--no-prompt')
+        check('notes sandbox creates ' + name, rc == 0, out)
+    alpha = source / 'alpha'
+    for rel in ('docs/notes.md', 'docs/other.md'):
+        local('docs_new.py', rel, '--type', 'plan', '--title', Path(rel).stem.title(), '--by', 'human', cwd=alpha)
+    note = alpha / 'docs/notes.md'
+    lines = ''.join(f'Reference line {i}.\n' for i in range(1, 101))
+    note.write_text(note.read_text().replace('## Change Log', 'Original paragraph.\n\n- [ ] A handwritten task\n\n' + lines + '\n## Change Log'))
+    local('docs_stamp.py', 'docs/notes.md', '--by', 'human', '--summary', 'Add body', cwd=alpha)
+    pc = alpha / '.docs.yaml'
+    pc.write_text(pc.read_text() + '\nfolderwise-ibridgeedit:\n  - "docs/notes*.md"\n  - "journal/**/*.md"\n  - "archive/**"\n')
+    for rel in ('journal/2026/entry.md', 'archive/old.md'):
+        local('docs_new.py', rel, '--type', 'plan', '--title', 'Deep', '--by', 'human', cwd=alpha)
+    commit(alpha, 'Add note and edit patterns')
+    rc, out = invoke('setup', '--source', source, '--vault', vault, '--notifications', 'off', '--no-schedule')
+    mirror, other, view = vault / 'alpha/docs/notes.md', vault / 'alpha/docs/other.md', vault / '_Folderwise Tasks/alpha.md'
+    check('notes sandbox exports the note', rc == 0 and mirror.read_text() == note.read_text(), out)
+    base = mirror.read_text()
+
+    def pause_and_resolve(label, text, expected, path=mirror, key='alpha/docs/notes.md', runs=1):
+        before = head()
+        path.write_text(text)
+        for _ in range(runs):
+            rc, out = invoke('sync')
+        check(label, rc == 1 and expected in out and head() == before and path.read_text() == text
+              and 'Paused projects: alpha.' in (vault / '_folderwise-sync-status.md').read_text(), out)
+        rc, out = invoke('resolve', key)
+        rc2, out2 = invoke('sync')
+        check(label + ' (recovers with resolve)', rc == 0 and rc2 == 0 and path.read_text() == base if path == mirror else rc2 == 0, out + out2)
+
+    # Off by default: configuration is validated and a text edit behaves as before.
+    pause_and_resolve('phone text edits are refused until the bridge switch is on', base.replace('Original paragraph.', 'Edited paragraph.'), 'only checkbox on/off changes are supported')
+    rc, out = invoke('configure', '--text-edits', 'maybe')
+    check('the text edit switch accepts only on or off', rc == 2, out)
+    rc, out = invoke('configure', '--edit-settle-seconds', '-5')
+    check('the quiet period cannot be negative', rc == 1 and 'edit_settle_seconds' in out, out)
+    original_config = pc.read_text()
+    pc.write_text(original_config.replace('folderwise-ibridgeedit:\n  - "docs/notes*.md"\n  - "journal/**/*.md"\n  - "archive/**"', 'folderwise-ibridgeedit: "docs/*.md"'))
+    rc, out = invoke('plan')
+    check('edit patterns must be a list of project-relative paths', rc == 1 and 'folderwise-ibridgeedit must be a list' in out, out)
+    pc.write_text(original_config.replace('"docs/notes*.md"', '"../outside.md"'))
+    rc, out = invoke('plan')
+    check('edit patterns cannot leave the project', rc == 1 and 'folderwise-ibridgeedit must be a list' in out, out)
+    pc.write_text(original_config)
+    rc, out = tool('icloud_bridge.py', '--config', conf, 'doctor')
+    rc, out = sh(['uv', 'run', '--quiet', str(source / '_tools/docs_doctor.py')], cwd=alpha)
+    check('project doctor recognizes folderwise-ibridgeedit', 'unknown key' not in out, out)
+    cfg = json.loads(conf.read_text())
+    conf.write_text(json.dumps(dict(cfg, text_edits='yes')))
+    rc, out = invoke('plan')
+    check('the text edit switch must be a real boolean', rc == 1 and 'text_edits must be boolean' in out, out)
+    conf.write_text(json.dumps(cfg))
+    invoke('configure', '--text-edits', 'on', '--edit-settle-seconds', '3600')
+
+    # A phone edit waits for a quiet period, then applies as one human-stamped commit.
+    phone_text = base.replace('Original paragraph.', 'Original paragraph.\n\nPhone added this paragraph.')
+    mirror.write_text(phone_text)
+    rc, out = invoke('plan')
+    check('plan says the phone note is waiting for the quiet period', rc == 0 and 'PHONE EDIT WAITING alpha/docs/notes.md' in out and '3600 seconds' in out, out)
+    before = head()
+    rc, out = invoke('sync')
+    check('the first run only notes the edit', rc == 0 and head() == before and mirror.read_text() == phone_text, out)
+    rc, out = invoke('sync')
+    check('an edit that has not stayed unchanged long enough keeps waiting', rc == 0 and head() == before and mirror.read_text() == phone_text, out)
+    invoke('configure', '--edit-settle-seconds', '0')
+    rc, out = invoke('plan')
+    check('plan previews the note edit that would apply', rc == 0 and 'PHONE EDIT alpha: would apply text edits to 1 note(s): docs/notes.md' in out, out)
+    rc, out = invoke('sync')
+    _, log = sh(['git', 'log', '-1', '--format=%s%n%B'], cwd=alpha)
+    check('a settled phone note edit is committed once', rc == 0 and head() != before and 'Phone added this paragraph.' in note.read_text(), out)
+    check('the note edit has human provenance and counts only', 'Update notes from Obsidian' in log and 'Bridge-Ops: toggle=0 rename=0 text-edit=1' in log
+          and 'Phone added' not in log and 'user-typed' in log and 'updated_by: human' in note.read_text()
+          and 'Edit notes via Obsidian iCloud bridge' in note.read_text(), log)
+    check('the stamped note returns to the vault', mirror.read_text() == note.read_text(), out)
+    status = (vault / '_folderwise-sync-status.md').read_text()
+    check('the status report counts the note edit', '| Edited |' in status and '| alpha |' in status and '| 0 | 0 | 1 |' in status, status)
+    after = head()
+    rc, out = invoke('sync')
+    check('an unchanged run after a note edit creates no commit', rc == 0 and head() == after, out)
+    base = mirror.read_text()
+
+    # ** patterns reach notes in nested folders and whole trees.
+    for rel in ('journal/2026/entry.md', 'archive/old.md'):
+        deep = vault / 'alpha' / rel
+        deep.write_text(deep.read_text().replace('## Change Log', 'Deep phone text.\n\n## Change Log'))
+    invoke('plan')
+    rc, out = invoke('plan')
+    check('plan shows nested notes matched by ** patterns', 'PHONE EDIT WAITING alpha/journal/2026/entry.md' in out and 'PHONE EDIT WAITING alpha/archive/old.md' in out, out)
+    invoke('sync')
+    rc, out = invoke('sync')
+    check('nested notes matched by ** patterns are imported', rc == 0 and 'Deep phone text.' in (alpha / 'journal/2026/entry.md').read_text()
+          and 'Deep phone text.' in (alpha / 'archive/old.md').read_text(), out)
+    base = mirror.read_text()
+
+    # Front matter formatting rewritten by Obsidian is ignored; real changes and generated regions are protected.
+    front = base.split('---\n', 2)[1]
+    reformatted = base.replace(front, front.replace('status: draft', 'status:    draft'), 1).replace('Phone added this paragraph.', 'Phone edited again.')
+    mirror.write_text(reformatted)
+    invoke('sync')
+    rc, out = invoke('sync')
+    check('harmless front matter reformatting is ignored and the Mac front matter is kept', rc == 0 and 'Phone edited again.' in note.read_text()
+          and 'status: draft' in note.read_text() and 'status:    draft' not in note.read_text(), out)
+    base = mirror.read_text()
+    pause_and_resolve('front matter changes are refused', base.replace('status: draft', 'status: archived'), 'front matter cannot be edited')
+    pause_and_resolve('front matter cannot be removed from the phone', base.split('---\n', 2)[2], 'front matter cannot be added or removed')
+    pause_and_resolve('broken front matter is refused', base.replace('title: Notes', 'title: [unclosed', 1), 'front matter cannot be edited')
+    pause_and_resolve('the change log cannot be edited from the phone', base.replace('| human |', '| robot |', 1), 'generated blocks')
+    pause_and_resolve('generated-block markers cannot be added', base.replace('Original paragraph.', 'Original paragraph. <!-- x:start -->'), 'markers cannot be added')
+    pause_and_resolve('a note cannot be emptied', '', 'empties the note')
+    pause_and_resolve('a note cannot lose more than half its lines', base.replace(lines, ''), 'removes more than half')
+    pause_and_resolve('a very large paste is refused', base + 'x' * 300000, 'under 256 KB')
+    pause_and_resolve('a huge rewrite is refused', base.replace('## Change Log', ''.join(f'Pasted {i}\n' for i in range(250)) + '\n## Change Log'), 'more than 200 lines')
+    pause_and_resolve('a phone edit that fails project lint leaves the Mac note unchanged', base.replace('Original paragraph.', 'See [missing](missing-file.md).'), 'missing', runs=2)
+    other_before = other.read_text()
+    pause_and_resolve('notes outside the patterns are still refused', other_before.replace('## Change Log', 'Sneaky edit\n\n## Change Log'), 'only checkbox on/off changes are supported', path=other, key='alpha/docs/other.md')
+
+    # The Mac and the phone both changed the note; only the Mac copy is kept until resolved.
+    mirror.write_text(base.replace('Original paragraph.', 'Phone side change.'))
+    invoke('sync')
+    note.write_text(note.read_text().replace('Original paragraph.', 'Mac side change.'))
+    local('docs_stamp.py', 'docs/notes.md', '--by', 'human', '--summary', 'Mac edit', cwd=alpha)
+    commit(alpha, 'Mac edit')
+    before = head()
+    rc, out = invoke('sync')
+    check('a note edited on both sides is paused with the file named', rc == 1 and 'changed on the Mac after it was exported' in out and head() == before
+          and 'Phone side change.' in mirror.read_text(), out)
+    invoke('resolve', 'alpha/docs/notes.md')
+    rc, out = invoke('sync')
+    check('resolve keeps the Mac version and resumes the project', rc == 0 and 'Mac side change.' in mirror.read_text() and 'Phone side change.' not in mirror.read_text(), out)
+    base = mirror.read_text()
+
+    # A copy saved from an older export would undo newer Mac text, so it is refused.
+    older = base
+    note.write_text(note.read_text().replace('Mac side change.', 'Newer Mac text.'))
+    local('docs_stamp.py', 'docs/notes.md', '--by', 'human', '--summary', 'Newer Mac text', cwd=alpha)
+    commit(alpha, 'Newer Mac text')
+    invoke('sync')
+    check('the vault copy follows the newer Mac text', 'Newer Mac text.' in mirror.read_text())
+    base = mirror.read_text()
+    pause_and_resolve('a phone copy saved from an older export is refused (its change log differs)', older.replace('Phone edited again.', 'Phone edited again, stale.'), 'generated blocks')
+
+    # Task toggles in an editable note still use the task path; a toggle and a text edit of the same note conflict.
+    mirror.write_text(base.replace('- [ ] A handwritten task', '- [x] A handwritten task'))
+    rc, out = invoke('sync')
+    _, log = sh(['git', 'log', '-1', '--format=%s'], cwd=alpha)
+    check('toggles in an editable note stay ordinary task imports', rc == 0 and '- [x] A handwritten task' in note.read_text() and 'Update task completion' in log, out)
+    base = mirror.read_text()
+    mirror.write_text(base.replace('Phone edited again.', 'Phone edit plus a view toggle.'))
+    invoke('sync')
+    view.write_text(view.read_text().replace('- [x] A handwritten task', '- [ ] A handwritten task'))
+    before = head()
+    rc, out = invoke('sync')
+    check('a note edit and a task change in the same note pause the project', rc == 1 and 'edited on the phone and one of its tasks' in out and head() == before, out)
+    invoke('resolve', 'alpha/docs/notes.md')
+    view.write_text(view.read_text().replace('- [ ] A handwritten task', '- [x] A handwritten task'))
+    invoke('sync')
+    base = mirror.read_text()
+
+    # CRLF notes keep their line endings.
+    local('docs_new.py', 'docs/notes-windows.md', '--type', 'plan', '--title', 'Windows', '--by', 'human', cwd=alpha)
+    windows = alpha / 'docs/notes-windows.md'
+    windows.write_bytes(windows.read_text().replace('## Change Log', 'Windows paragraph.\n\n## Change Log').replace('\n', '\r\n').encode())
+    commit(alpha, 'Add CRLF note')
+    invoke('sync')
+    copy = vault / 'alpha/docs/notes-windows.md'
+    copy.write_text(copy.read_text().replace('Windows paragraph.', 'Windows paragraph edited.'))
+    invoke('sync')
+    rc, out = invoke('sync')
+    raw = windows.read_bytes()
+    check('a note edit keeps CRLF line endings in the source', rc == 0 and b'Windows paragraph edited.\r\n' in raw and b'\n' not in raw.replace(b'\r\n', b''), out)
+
+    # Projects without patterns are not affected, and the global switch turns the feature off again.
+    beta_note = vault / 'beta/README.md'
+    saved = beta_note.read_text()
+    beta_note.write_text(saved + '\nUnlisted project edit.\n')
+    rc, out = invoke('sync')
+    check('a project without patterns still refuses note edits', rc == 1 and 'Paused projects: beta.' in (vault / '_folderwise-sync-status.md').read_text(), out)
+    beta_note.write_text(saved)
+    invoke('sync')
+    invoke('configure', '--text-edits', 'off')
+    mirror.write_text(base.replace('Phone edited again.', 'Edit while the switch is off.'))
+    rc, out = invoke('sync')
+    check('turning the bridge switch off refuses note edits again', rc == 1 and 'only checkbox' in out, out)
+    mirror.write_text(base)
+    rc, out = invoke('sync')
+    check('and the project recovers when the edit is undone', rc == 0, out)
+
+
+def s_ibridge_transient():
+    """A brief iCloud file lock (EDEADLK) is retried quietly; the third consecutive failure is reported."""
+    root = CTX['root'] / 'transient-sandbox'
+    source, vault, home = root / 'source', root / 'vault', root / 'state'
+    source.mkdir(parents=True)
+    for name in ('_tools', '_template'):
+        shutil.copytree(CTX['root'] / name, source / name, ignore=shutil.ignore_patterns('__pycache__'))
+    conf = home / 'config.json'
+    rc, out = sh(['uv', 'run', '--quiet', str(source / '_tools/new_project.py'), '--name', 'alpha', '--description', 'Fictional lock test', '--no-prompt'], cwd=source)
+    rc, out = tool('icloud_bridge.py', '--config', conf, 'setup', '--source', source, '--vault', vault, '--notifications', 'off', '--no-schedule')
+    check('transient sandbox is set up', rc == 0, out)
+    code = ("import errno, sys\nsys.path.insert(0, %r)\nimport icloud_bridge as bridge\n"
+            "def locked(*args, **kwargs):\n    raise OSError(errno.EDEADLK, 'Resource deadlock avoided')\n"
+            "bridge.requests = locked\nsys.argv = ['icloud_bridge.py', '--config', %r, 'sync']\nsys.exit(bridge.main())\n") % (str(source / '_tools'), str(conf))
+    files_before = sorted(p.relative_to(vault).as_posix() for p in vault.rglob('*') if p.is_file() and '.obsidian' not in p.parts)
+
+    def locked_run():
+        return sh(['uv', 'run', '--quiet', '--with', 'pyyaml', '--with', 'tzdata', 'python', '-c', code], cwd=source)
+
+    for number in (1, 2):
+        rc, out = locked_run()
+        check(f'a brief iCloud lock is deferred quietly (run {number})', rc == 0 and 'Deferred: iCloud is busy' in out
+              and json.loads((home / 'last-run.json').read_text()).get('deferred') == number, out)
+    rc, out = locked_run()
+    check('the third consecutive lock failure is reported', rc == 1 and 'Resource deadlock avoided' in out, out)
+    check('a locked run never removes exported files', sorted(p.relative_to(vault).as_posix() for p in vault.rglob('*') if p.is_file() and '.obsidian' not in p.parts) == files_before)
+    rc, out = tool('icloud_bridge.py', '--config', conf, 'sync')
+    check('a normal run clears the deferral counter', rc == 0 and 'deferred' not in json.loads((home / 'last-run.json').read_text()), out)
+
+
+def s_ibridge_status():
+    """The status report is the source of truth. A mocked transport (plain file copies between the Mac source and the vault,
+    standing in for iCloud) drives every outcome, and each one is asserted in the report, the CLI output and the last-run record."""
+    root = CTX['root'] / 'status-sandbox'
+    source, vault, home = root / 'source', root / 'vault', root / 'state'
+    source.mkdir(parents=True)
+    for name in ('_tools', '_template'):
+        shutil.copytree(CTX['root'] / name, source / name, ignore=shutil.ignore_patterns('__pycache__'))
+    conf, status_file = home / 'config.json', vault / '_folderwise-sync-status.md'
+    fake = root / 'fakebin'
+    fake.mkdir()
+    for executable in ('open', 'codesign', 'launchctl'):
+        (fake / executable).write_text('#!/bin/sh\nexit 0\n')
+        (fake / executable).chmod(0o755)
+    (fake / 'open').write_text('#!/bin/sh\ncat "' + str(home / 'notification-message.txt') + '" >> "' + str(root / 'banners') + '"\necho >> "' + str(root / 'banners') + '"\nexit 0\n')
+    (fake / 'osacompile').write_text('#!' + sys.executable + '\nimport pathlib,plistlib,sys\np=pathlib.Path(sys.argv[2])/"Contents"\n(p/"Resources").mkdir(parents=True)\n(p/"Info.plist").write_bytes(plistlib.dumps({"CFBundleName":"applet"}))\n(p/"Resources/main.scpt").write_bytes(pathlib.Path(sys.argv[3]).read_bytes())\n')
+    (fake / 'osacompile').chmod(0o755)
+
+    def invoke(*args, extra=None):
+        return tool('icloud_bridge.py', '--config', conf, *args, env={'PATH': str(fake) + os.pathsep + os.environ['PATH'], **(extra or {})})
+
+    def local(name, *args, cwd=None):
+        return sh(['uv', 'run', '--quiet', str(source / '_tools' / name), *map(str, args)], cwd=cwd or source)
+
+    def commit(project, message):
+        sh(['git', 'add', '-A'], cwd=project)
+        return sh(['git', 'commit', '-qm', message], cwd=project)
+
+    def banners():
+        return (root / 'banners').read_text() if (root / 'banners').exists() else ''
+
+    def section(text, title):
+        m = re.search(r'^## ' + re.escape(title) + r'\n\n(.*?)(?=\n## |\Z)', text, re.S | re.M)
+        return m[1].strip() if m else None
+
+    def bullets(text):
+        return [line[2:] for line in (section(text, 'Issues') or '').splitlines() if line.startswith('- ')]
+
+    def observe(label, rc_expected, issues=(), present=(), absent=(), extra=None, command='sync'):
+        """Run one sync and judge it by its report: issues, sections, consistency with the CLI and last-run record, and privacy."""
+        rc, out = invoke(command, extra=extra)
+        text = status_file.read_text()
+        listed = bullets(text)
+        problems = []
+        if rc != rc_expected:
+            problems.append(f'rc {rc} != {rc_expected}')
+        if rc_expected == 0 and section(text, 'Issues') != 'None.':
+            problems.append('Issues is not None.')
+        problems += [f'issue missing: {s} (report lists {listed})' for s in issues if not any(s in b for b in listed)]
+        problems += [f'report missing: {s}' for s in present if s not in text]
+        problems += [f'report has: {s}' for s in absent if s in text]
+        if command == 'sync' and listed != [line[6:] for line in out.splitlines() if line.startswith('ERROR ')]:
+            problems.append('report issues differ from the ERROR lines on the CLI')
+        if command == 'sync' and json.loads((home / 'last-run.json').read_text())['issues'] != listed:
+            problems.append('report issues differ from last-run.json')
+        problems += [f'report leaks {s}' for s in ('PHONE-SECRET', str(source), str(home)) if s in text]
+        check(label, not problems, out + '\n' + text + '\nPROBLEMS: ' + '; '.join(problems))
+        return out, text
+
+    for name in ('alpha', 'beta', 'gamma'):
+        rc, out = local('new_project.py', '--name', name, '--description', 'Fictional status test', '--no-prompt')
+        check('status sandbox creates ' + name, rc == 0, out)
+        local('docs_new.py', 'docs/checklist.md', '--type', 'plan', '--title', 'Checklist', '--by', 'human', cwd=source / name)
+    alpha, beta, gamma = (source / n for n in ('alpha', 'beta', 'gamma'))
+    commit(gamma, 'Add checklist')
+    local('docs_new.py', 'docs/notes.md', '--type', 'plan', '--title', 'Notes', '--by', 'human', cwd=alpha)
+    doc = alpha / 'docs/checklist.md'
+    doc.write_text(doc.read_text().replace('## Change Log', '- [ ] A1 task\n- [ ] A2 task\n\n## Change Log'))
+    local('docs_stamp.py', 'docs/checklist.md', '--by', 'human', '--summary', 'Add tasks', cwd=alpha)
+    notes = alpha / 'docs/notes.md'
+    notes.write_text(notes.read_text().replace('## Change Log', 'Original paragraph.\n\n## Change Log'))
+    local('docs_stamp.py', 'docs/notes.md', '--by', 'human', '--summary', 'Add body', cwd=alpha)
+    (alpha / '.docs.yaml').write_text((alpha / '.docs.yaml').read_text() + '\nfolderwise-ibridgerename: true\nfolderwise-ibridgeedit:\n  - "docs/notes*.md"\n')
+    commit(alpha, 'Add tasks, note and settings')
+    (beta / 'data').mkdir(exist_ok=True)
+    (beta / 'data/tasks.csv').write_text('id,title,done\nrow-1,B1 task,false\n')
+    (beta / 'scripts').mkdir(exist_ok=True)
+    (beta / 'scripts/adapter.py').write_text(
+        "import csv,json,os,sys\nfrom pathlib import Path\nop=sys.argv[1]\n"
+        "if os.environ.get('BRIDGE_FAIL')==op:\n print('adapter '+op+' refused',file=sys.stderr);sys.exit(1)\n"
+        "p=Path('data/tasks.csv');rows=list(csv.DictReader(p.open()))\n"
+        "if op=='list':\n print(json.dumps([dict(id=r['id'],title=r['title'],checked=r['done']=='true',path='docs/checklist.md') for r in rows]))\n"
+        "elif op=='apply':\n changes={c['id']:c['checked'] for c in json.load(sys.stdin)}\n for r in rows:\n  if r['id'] in changes: r['done']='true' if changes[r['id']] else 'false'\n"
+        " with p.open('w',newline='') as f:\n  w=csv.DictWriter(f,fieldnames=['id','title','done']);w.writeheader();w.writerows(rows)\n"
+        " note=Path('docs/checklist.md');text=note.read_text();s=text.index('<!-- tasks:start -->');e=text.index('<!-- tasks:end -->')\n"
+        " note.write_text(text[:s]+'<!-- tasks:start -->\\n'+''.join('- [ ] '+r['title']+'\\n' for r in rows if r['done']=='false')+text[e:])\n")
+    doc = beta / 'docs/checklist.md'
+    doc.write_text(doc.read_text().replace('## Change Log', '<!-- tasks:start -->\n- [ ] B1 task\n<!-- tasks:end -->\n\n## Change Log'))
+    local('docs_stamp.py', 'docs/checklist.md', '--by', 'human', '--summary', 'Add generated task', cwd=beta)
+    commit(beta, 'Add adapter')
+    rc, out = tool('icloud_bridge.py', '--config', conf, 'setup', '--source', source, '--vault', vault, '--notifications', 'errors', '--no-schedule',
+                   env={'PATH': str(fake) + os.pathsep + os.environ['PATH']})
+    check('status sandbox setup reports the missing adapter', rc == 0, out)
+    cfg = json.loads(conf.read_text())
+    cfg['adapters'] = {'beta': [sys.executable, 'scripts/adapter.py']}
+    conf.write_text(json.dumps(cfg))
+    invoke('configure', '--text-edits', 'on', '--edit-settle-seconds', '0')
+    views = {n: vault / f'_Folderwise Tasks/{n}.md' for n in ('alpha', 'beta', 'gamma')}
+    mirror = vault / 'alpha/docs/notes.md'
+
+    def heads():
+        return {n: sh(['git', 'rev-parse', 'HEAD'], cwd=source / n)[1] for n in ('alpha', 'beta', 'gamma')}
+
+    def flip(text, title):
+        """Toggle the checkbox of the task with this title in a generated view."""
+        return re.sub(r'- \[( |x)\] ' + re.escape(title), lambda m: '- [' + ('x' if m[1] == ' ' else ' ') + '] ' + title, text, count=1)
+
+    def phone(path, edit):
+        """Mock transport, phone to Mac: the phone saves a file and iCloud delivers it into the vault."""
+        path.write_text(edit(path.read_text()))
+
+    # --- success paths -------------------------------------------------------------------------------------------
+    out, text = observe('a clean export reports no issues and its sizes', 0, present=['# Folderwise sync status', 'Mode: **full**', 'Estimated managed export', '## Omitted files'],
+                        absent=['Paused projects', 'Phone edits not applied', 'Recent imports', 'iCloud conflict copies'])
+    check('the status report is a bridge-owned file with a recorded hash', json.loads((home / 'report.json').read_text())['hash'] == hashlib.sha256(status_file.read_bytes()).hexdigest())
+    stamp = status_file.stat().st_mtime_ns
+    observe('an unchanged run leaves the report byte-for-byte alone', 0)
+    check('and does not rewrite it', status_file.stat().st_mtime_ns == stamp)
+    observe('plan never changes the report', 0, command='plan')
+    check('plan left the report alone', status_file.stat().st_mtime_ns == stamp)
+    phone(views['alpha'], lambda s: s.replace('- [ ] A1 task', '- [x] A1 task'))
+    out, text = observe('a toggle import is listed', 0, present=['## Recent imports', '| alpha |'])
+    check('the listed commit is the import commit', sh(['git', 'rev-parse', '--short', 'HEAD'], cwd=alpha)[1].strip() in text, text)
+    phone(views['alpha'], lambda s: s.replace('A2 task', 'A2 renamed'))
+    out, text = observe('a rename import adds a second row', 0, present=['| 0 | 1 | 0 |'])
+    phone(mirror, lambda s: s.replace('Original paragraph.', 'Original paragraph.\n\nPhone note edit.'))
+    out, text = observe('a note edit waiting out its quiet period is listed, not failed', 0, present=['## Phone edits waiting', '- alpha/docs/notes.md'])
+    out, text = observe('a settled note edit is imported and counted', 0, present=['| 0 | 0 | 1 |'], absent=['Phone edits waiting'])
+    phone(views['beta'], lambda s: s.replace('- [ ] B1 task', '- [x] B1 task'))
+    observe('an adapter toggle import is listed', 0, present=['| beta |'])
+    observe('a lean mode export lists the files it leaves out and why', 0, command='plan')
+    invoke('configure', '--mode', 'lean')
+    out, text = observe('lean mode lists excluded files with the reason', 0, present=['excluded by lean mode', 'beta/data/tasks.csv'])
+    invoke('configure', '--mode', 'full')
+    img = alpha / 'docs/pic.png'
+    img.write_bytes(b'12345678')
+    notes.write_text(notes.read_text().replace('Original paragraph.', '![pic](pic.png)\n\nOriginal paragraph.'))
+    local('docs_stamp.py', 'docs/notes.md', '--by', 'human', '--summary', 'Add images', cwd=alpha)
+    commit(alpha, 'Add images')
+    invoke('configure', '--mode', 'lean', '--max-image-bytes', '4')
+    out, text = observe('image budget omissions are listed with sizes and reasons', 0, present=['exceeds per-image limit', 'alpha/docs/pic.png'])
+    alerts = banners().count('needs attention')
+    check('an actionable omission alerts', alerts >= 1, banners())
+    observe('the same omission is not announced again', 0)
+    check('and does not add an alert', banners().count('needs attention') == alerts, banners())
+    invoke('configure', '--mode', 'full', '--unlimited-images')
+    observe('lifting the limit clears the omission', 0, absent=['exceeds per-image limit'])
+
+    # --- phone edits that cannot be applied ---------------------------------------------------------------------
+    before = heads()
+    phone(views['alpha'], lambda s: s + 'PHONE-SECRET new line\n')
+    out, text = observe('an added phone line is rejected, restored and named without echoing the text', 0, present=['## Phone edits not applied', '_Folderwise Tasks/alpha.md', 'number of lines changed'], absent=['PHONE-SECRET'])
+    check('the rejected view is restored and nothing was committed', 'PHONE-SECRET' not in views['alpha'].read_text() and heads() == before)
+    check('rejected phone edits send an alert', banners().count('needs attention') == alerts + 1, banners())
+    phone(views['alpha'], lambda s: re.sub(r'(A1 task[^\n]*\))', r'\1 PHONE-SECRET', s, count=1))
+    observe('typing after a task link is rejected', 0, present=['keep the checkbox and the trailing source link'], absent=['PHONE-SECRET'])
+    phone(views['alpha'], lambda s: s.replace('A2 renamed', 'A2 [x](http://example.com) PHONE-SECRET'))
+    observe('a link typed into a title is rejected with its reason', 0, present=['links or images'], absent=['PHONE-SECRET'])
+    phone(views['gamma'], lambda s: s.replace('gamma tasks', 'gamma tasks PHONE-SECRET'))
+    observe('a title edit is refused when renames are off for the project', 0, present=['_Folderwise Tasks/gamma.md'], absent=['PHONE-SECRET'])
+    phone(views['alpha'], lambda s: s.replace('A1 task', 'TMPX').replace('A2 renamed', 'A1 task').replace('TMPX', 'A2 renamed'))
+    observe('swapped titles are refused', 0, present=['already used by another task'])
+
+    # --- project problems pause only that project ---------------------------------------------------------------
+    (alpha / 'scratch.txt').write_text('uncommitted\n')
+    phone(views['alpha'], lambda s: flip(s, 'A1 task'))
+    out, text = observe('a dirty project is paused and named', 1, issues=['uncommitted Mac changes'], present=['Paused projects: alpha.', 'other projects keep syncing'])
+    alerts = banners().count('needs attention')
+    observe('the same pause is not announced again', 1, issues=['uncommitted Mac changes'])
+    check('and does not add an alert', banners().count('needs attention') == alerts, banners())
+    (alpha / 'scratch.txt').unlink()
+    observe('fixing the cause clears the pause', 0, absent=['Paused projects'])
+    hook = alpha / '.git/hooks/pre-commit'
+    original_hook = hook.read_text()
+    hook.write_text('#!/bin/sh\necho intentional hook rejection >&2\nexit 1\n')
+    phone(views['alpha'], lambda s: flip(s, 'A1 task'))
+    observe('a failing Git hook pauses the project and shows the hook text', 1, issues=['intentional hook rejection'], present=['Paused projects: alpha.'])
+    hook.write_text(original_hook)
+    observe('repairing the hook resumes and imports', 0, present=['| alpha |'])
+    phone(views['beta'], lambda s: s.replace('- [x] B1 task', '- [ ] B1 task'))
+    observe('an adapter apply failure pauses only the adapter project', 1, issues=['adapter apply refused'], present=['Paused projects: beta.'], extra={'BRIDGE_FAIL': 'apply'})
+    observe('an adapter validate failure pauses only the adapter project', 1, issues=['adapter validate refused'], present=['Paused projects: beta.'], extra={'BRIDGE_FAIL': 'validate'})
+    out, text = observe('an adapter list failure pauses the project and keeps its export', 1, issues=['adapter list refused'], present=['Paused projects: beta.'], extra={'BRIDGE_FAIL': 'list'})
+    check('a paused project keeps its previous vault files', (vault / 'beta/docs/checklist.md').exists() and views['beta'].exists())
+    observe('the adapter project imports once the adapter works again', 0, absent=['Paused projects'])
+    phone(mirror, lambda s: s.replace('Original paragraph.', 'Edited ' + 'line\n' * 250 + 'Original paragraph.'))
+    observe('an over-large note edit is refused and the project paused', 1, issues=['alpha/docs/notes.md', 'more than 200 lines'], present=['Paused projects: alpha.'])
+    invoke('resolve', 'alpha/docs/notes.md')
+    observe('resolve restores the Mac note and the project resumes', 0, absent=['Paused projects'])
+    phone(mirror, lambda s: s.replace('status: draft', 'status: archived'))
+    observe('a front matter edit is refused with the file named', 1, issues=['alpha/docs/notes.md', 'front matter'], present=['Paused projects: alpha.'])
+    invoke('resolve', 'alpha/docs/notes.md')
+    phone(views['alpha'], lambda s: s.replace('- [ ] A1 task', '- [x] A1 task'))
+    notes.write_text(notes.read_text().replace('Original paragraph.', 'Mac side text.'))
+    local('docs_stamp.py', 'docs/notes.md', '--by', 'human', '--summary', 'Mac edit', cwd=alpha)
+    commit(alpha, 'Mac edit while the phone edits')
+    observe('a Mac change to a note with no pending phone edit simply exports', 0)
+    # A view toggle for a task renamed on the Mac is a recorded rejection, not a pause.
+    doc = alpha / 'docs/checklist.md'
+    doc.write_text(doc.read_text().replace('A1 task', 'A1 mac'))
+    local('docs_stamp.py', 'docs/checklist.md', '--by', 'human', '--summary', 'Rename on Mac', cwd=alpha)
+    commit(alpha, 'Rename on Mac')
+    phone(views['alpha'], lambda s: flip(s, 'A1 task'))
+    observe('a pending toggle for a task renamed on the Mac is rejected with that reason', 0, present=['changed or disappeared on Mac'])
+
+    # --- bridge-wide problems freeze every export ---------------------------------------------------------------
+    dashboard = vault / 'Tasks.md'
+    saved = dashboard.read_text()
+    local('docs_new.py', 'docs/late.md', '--type', 'plan', '--title', 'Late', '--by', 'human', cwd=gamma)
+    commit(gamma, 'Add late doc')
+    dashboard.write_text(saved + 'PHONE-SECRET dashboard edit\n')
+    out, text = observe('an edit to the generated dashboard freezes every export', 1, issues=['Tasks.md: only checkbox on/off changes are supported'], absent=['Paused projects'])
+    check('a frozen run exports nothing new', not (vault / 'gamma/docs/late.md').exists())
+    dashboard.write_text(saved)
+    observe('restoring the dashboard unfreezes the export', 0)
+    check('and the held-back document arrives', (vault / 'gamma/docs/late.md').exists())
+    collision = vault / 'gamma/docs/collide.md'
+    collision.write_text('unrelated vault file\n')
+    local('docs_new.py', 'docs/collide.md', '--type', 'plan', '--title', 'Collide', '--by', 'human', cwd=gamma)
+    commit(gamma, 'Add colliding doc')
+    observe('a new source file colliding with an unowned vault file pauses its project', 1, issues=['gamma/docs/collide.md: unexpected vault edit or unowned file'], present=['Paused projects: gamma.'])
+    check('the colliding vault file is preserved', collision.read_text() == 'unrelated vault file\n')
+    collision.unlink()
+    observe('removing the collision resumes the project', 0, absent=['Paused projects'])
+    (home / 'export.json').write_text(json.dumps({'writes': {'gamma/docs/late.md': {'before': 'a' * 64, 'after': 'b' * 64, 'data': ''}}, 'removes': {}, 'state': {'files': {}, 'tasks': {}}}))
+    observe('an interrupted export journal that no longer matches is reported', 1, issues=['changed during interrupted export'])
+    (home / 'export.json').unlink()
+    observe('removing the journal recovers', 0)
+    victim = vault / 'gamma/README.md'
+    saved_readme = victim.read_text()
+    victim.unlink()
+    victim.symlink_to(vault / 'Tasks.md')
+    observe('a symlink in the vault is refused and reported', 1, issues=['symlink not supported'])
+    victim.unlink()
+    victim.write_text(saved_readme)
+    observe('replacing the symlink with the file recovers', 0)
+    victim.unlink()
+    victim.mkdir()
+    observe('a directory masquerading as an exported file is reported', 1, issues=['expected a file'])
+    victim.rmdir()
+    observe('removing the directory restores the export', 0)
+    check('the exported file is back', victim.exists())
+    invoke('disable', 'alpha')
+    commit(alpha, 'Disable bridge for alpha')
+    phone(views['alpha'], lambda s: flip(s, 'A1 mac'))
+    observe('disabling a project with a pending phone edit freezes everything with that reason', 1, issues=['disabled project has pending phone edits'])
+    invoke('enable', 'alpha')
+    commit(alpha, 'Enable bridge for alpha')
+    observe('enabling the project again imports the preserved edit', 0, absent=['disabled project'])
+
+    # --- iCloud artefacts (mocked) -------------------------------------------------------------------------------
+    (vault / 'alpha/docs/notes 2.md').write_text('iCloud conflict copy\n')
+    (vault / 'alpha/docs/checklist (conflicted copy).md').write_text('another copy\n')
+    out, text = observe('mock iCloud conflict copies are listed and never imported', 0, present=['## iCloud conflict copies', 'alpha/docs/notes 2.md', 'alpha/docs/checklist (conflicted copy).md'])
+    check('conflict copies are left in place for the user', (vault / 'alpha/docs/notes 2.md').read_text() == 'iCloud conflict copy\n')
+    (vault / 'alpha/docs/notes 2.md').unlink()
+    (vault / 'alpha/docs/checklist (conflicted copy).md').unlink()
+    observe('deleting the copies clears the section', 0, absent=['iCloud conflict copies'])
+
+    # --- status report ownership ---------------------------------------------------------------------------------
+    saved_report = status_file.read_text()
+    status_file.write_text('User-owned notes\n')
+    rc, out = invoke('sync')
+    check('an edited status report is never overwritten and the CLI says why', rc == 1 and 'has unowned edits' in out and status_file.read_text() == 'User-owned notes\n', out)
+    status_file.write_text(saved_report)
+    observe('restoring the report resumes normal syncing', 0)
+    legacy = vault / 'Bridge Status.md'
+    legacy.write_text('old report with my notes\n')
+    observe('an unowned legacy report is flagged in the report and preserved', 1, issues=['Bridge Status.md: legacy report has unowned edits'])
+    legacy.unlink()
+    observe('removing the legacy report clears the warning', 0)
+
+    # --- doctor, source and config -------------------------------------------------------------------------------
+    rc, out = invoke('doctor')
+    check('doctor agrees with a clean report', rc == 0, out)
+    cfg = json.loads(conf.read_text())
+    good = dict(cfg)
+    cfg['source'] = str(root / 'missing-source')
+    conf.write_text(json.dumps(cfg))
+    rc, out = invoke('sync')
+    check('an unavailable source is reported in the status file and removes nothing', rc == 1 and 'source directory is unavailable' in status_file.read_text()
+          and views['alpha'].exists() and (vault / 'alpha/docs/notes.md').exists(), out)
+    conf.write_text(json.dumps(good))
+    observe('restoring the source recovers', 0)
+    cfg['notifications'] = 'sometimes'
+    conf.write_text(json.dumps(cfg))
+    rc, out = invoke('sync')
+    check('an invalid bridge config stops before any export and says so on the CLI', rc == 1 and 'invalid mode or notification setting' in out, out)
+    conf.write_text(json.dumps(good))
+    phone(views['alpha'], lambda s: s + 'PHONE-SECRET again\n')
+    observe('doctor reports the last issue state', 0, command='sync')
+    rc, out = invoke('doctor')
+    check('doctor stays healthy after handled rejections', rc == 0, out)
+    check('alerts carry no task or document text', 'PHONE-SECRET' not in banners() and all(l.startswith('Folderwise bridge needs attention.') for l in banners().splitlines() if l.strip()), banners())
+
+
 def s_ibridge_setup():
     """Verify explicit vault setup, persistent project defaults, and safe uninstall."""
     root=CTX['root']/'obsidian-setup-sandbox';source=root/'source';source.mkdir(parents=True)
@@ -2154,7 +2691,7 @@ SECTIONS = [
     ("create", s_create), ("new_doc", s_new_doc_and_index), ("stamp", s_stamp_and_hook), ("hook", s_hook_fail_closed),
     ("lint", s_lint_rules), ("timezone", s_timezone), ("links", s_links), ("staged_source", s_staged_source), ("markdown_fences", s_markdown_fences), ("toc", s_toc), ("mv", s_mv),
     ("tables", s_tables), ("stale", s_stale_index_recent), ("sync", s_sync),
-    ("ibridge", s_ibridge), ("ibridge_rename", s_ibridge_rename), ("ibridge_isolation", s_ibridge_isolation), ("ibridge_setup", s_ibridge_setup), ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache),
+    ("ibridge", s_ibridge), ("ibridge_rename", s_ibridge_rename), ("ibridge_isolation", s_ibridge_isolation), ("ibridge_notes", s_ibridge_notes), ("ibridge_transient", s_ibridge_transient), ("ibridge_status", s_ibridge_status), ("ibridge_setup", s_ibridge_setup), ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache),
     ("framework_checkout", s_framework_checkout), ("framework_index", s_framework_index), ("ci_allowlist", s_ci_allowlist),
 ]
 
