@@ -152,6 +152,18 @@ uv run _tools/icloud_bridge.py logs
 
 The job launches through a private executable named **`folderwise-ibridgesync`**, so macOS Login Items identifies Folderwise rather than the shared `uv` runtime. The job label remains `org.folderwise.ibridge`. `uv` is still a dependency; its installed binary is not renamed or modified. macOS still shows its normal background-item notification and provides the normal on/off control. File-access prompts may name the runtime that actually reads the files. See [Apple's attribution rules](https://developer.apple.com/documentation/servicemanagement/updating-helper-executables-from-earlier-versions-of-macos).
 
+### Expected macOS background-activity notice
+
+When you enable scheduled syncing, macOS may display an **App Background Activity** notice saying that **folderwise-ibridgesync** can run in the background. This is the expected system notice for the sync job you just enabled.
+
+![Expected macOS App Background Activity notice for folderwise-ibridgesync](assets/obsidian-background-activity-notice.png)
+
+You can manage the helper under **System Settings → General → Login Items & Extensions**, in **Background App Activity**. Keep its switch enabled for scheduled syncing. Because each sync runs briefly, **Not running in background** between runs is normal; use `status` or `doctor` to check the last successful sync.
+
+![The enabled folderwise-ibridgesync helper in macOS Login Items](assets/obsidian-login-items.png)
+
+Folderwise also sends its own setup-success notification with the configured interval, described below. That confirmation is separate from the macOS background-activity notice.
+
 For an inspectable preparation step without registering or enabling a job:
 
 ```sh
