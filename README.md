@@ -25,15 +25,17 @@ You solved it once. Keep the instructions, the evidence, and the decisions somew
 
 ## 🆕 What's new
 
-**[Folderwise 0.1.0](https://github.com/TheLinuxGuy/folderwise/releases/tag/v0.1.0): the first release.**
+**Folderwise 0.2.0: your knowledge folders, in your pocket.** An optional, opt-in **Obsidian + iCloud bridge** lets you read your projects and tick off tasks on an iPhone, while your Mac stays the owner of every repository. See the [Releases page](https://github.com/TheLinuxGuy/folderwise/releases) for the full list of changes.
 
-- 📦 **Downloadable releases.** Zip and tar.gz archives with `SHA256SUMS`, built from one recorded commit and extracted and tested on Linux and macOS before they are offered. Cloning is still recommended; archives have no Git history.
-- ✅ **Tested on every change.** 400+ tool and public-documentation checks run on Linux (Python 3.10 and 3.15) and macOS (Python 3.15), with a clean-machine install check and 85% production line coverage required.
-- 🛡️ **Guarded framework repository.** Only approved framework files can enter it; your knowledge projects, caches and credentials cannot.
-- 🔁 **Safe archive upgrades.** Step-by-step, no overwrite, no reset, and your projects are never touched: [upgrading an archive install](docs/framework-checkout.md#upgrading-an-archive-install).
-- 🪟 **Platforms.** Linux and macOS. Native Windows is not supported; use WSL.
+- 📱 **iPhone bridge.** A scheduled macOS LaunchAgent links your Mac-owned Git projects to an Obsidian vault through iCloud. The phone never pushes; checkbox toggles come back as local commits with provenance. **[Quick Start →](docs/obsidian.md#quick-start)**
+- ✅ **Real Obsidian Tasks 8.x support,** in emoji and Dataview formats: dates, priorities, in-progress, cancelled and custom statuses, automatic lifecycle dates, recurrence, on-completion delete, IDs and dependencies, nested and quoted subtasks.
+- 🛡️ **Safe by design.** Opt-in renames and copied-note edits, CSV task adapters with capability checks, a 120-second quiet period, contained and recoverable rejected edits, per-project pausing, and a status report. Mac and phone conflicts never silently overwrite.
+- 🧪 **Validated on a real iPhone.** 88 acceptance checks through the real scheduled job: 85 pass, 3 are blocked by physical limits, none failed. [Results and how to reproduce them →](docs/ibridge-acceptance-0.2.0.md)
+- 📦 **Minimal pull-only checkouts** for the framework beside your own repositories.
 
-See the [release notes](https://github.com/TheLinuxGuy/folderwise/releases/tag/v0.1.0) for the full list of changes.
+Not validated: offline-then-reconnect edits, a fresh vault's Tasks plugin load on the phone, and a visible notification banner. The bridge needs macOS; Android and native Windows are unsupported.
+
+**Earlier:** [Folderwise 0.1.0](https://github.com/TheLinuxGuy/folderwise/releases/tag/v0.1.0), the first release: downloadable archives with checksums, CI on every change, a guarded framework repository and safe archive upgrades ([upgrading an archive install](docs/framework-checkout.md#upgrading-an-archive-install)).
 
 ## 🚀 Getting started
 
@@ -92,7 +94,7 @@ Folderwise includes metadata and link validation, CSV-to-Markdown tables, genera
 | 🔎 `docs_index.py` / `docs_recent.py` / `docs_stale.py` | what exists, what changed lately, what is due for re-verification |
 | 🔀 `docs_mv.py` | moves or renames docs and headings and keeps every link valid |
 | 📊 `render_tables.py` | renders CSV files into Markdown tables |
-| ☁️ `icloud_bridge.py` | export selected files to iCloud; complete/reopen tasks in Obsidian on iPhone; validate and commit locally on Mac |
+| ☁️ `icloud_bridge.py` | export selected files to an Obsidian vault in iCloud; import supported iPhone task edits as validated local commits on the Mac |
 | 🩺 `docs_doctor.py` / `sync_rules.py` | health-check projects; push the template's shared rules into them |
 
 Every tool, flag and setting is documented in the [full guide](docs/guide.md).
@@ -109,11 +111,22 @@ Every tool, flag and setting is documented in the [full guide](docs/guide.md).
 - **Rename tasks** with per-project opt-in, or **edit selected notes** with both the bridge text-edit switch and project path-pattern opt-in. Generated task views accept only supported task edits.
 - **Keep a local history.** An available Mac validates imports against clean working trees and conflict rules, updates source files, and commits locally. Local commits do not push to GitHub.
 
-The iPhone bridge supports nested and quoted tasks, Tasks dates/priorities and custom statuses, and plugin-generated recurrence. See the [task compatibility and acceptance requirements](docs/obsidian.md#task-format-compatibility).
+**New to the bridge?** The [Quick Start](docs/obsidian.md#quick-start) gets it running in about five minutes.
 
-Scheduled sync defaults to **five minutes, plus iCloud delivery delay**. Folderwise provides no hosted sync service.
+Validated on a real iPhone for 0.2.0 ([88 checks, 85 pass, 3 blocked](docs/ibridge-acceptance-0.2.0.md)):
 
-**[Set up Obsidian + iCloud →](docs/obsidian.md)** · [See the task round trip](docs/obsidian.md#complete-and-reopen-from-iphone) · [Acceptance checklist](docs/ibridge-testing.md)
+| | Validated through the real scheduled job |
+|---|---|
+| ✅ **Tasks 8.x** | Due/start/scheduled dates, priorities, in-progress, cancelled and custom statuses, automatic created/done/cancelled dates, in emoji and Dataview formats; tags, links and Unicode preserved |
+| 🔁 **Recurrence** | Daily, weekly, monthly, when-done and undated, including completed-first order; `🏁 delete`; IDs and dependencies |
+| 🌳 **Subtasks** | Nested, tab-indented, numbered, quoted and callout tasks; reordering rejected |
+| ✏️ **Opt-in edits** | Task renames; copied-note child create, reparent and delete |
+| 🧾 **CSV adapters** | Boolean-only and rich adapters, with unsupported fields rejected by name |
+| 🛡️ **Safety** | Rejected edits are contained, restored, reported once and recoverable (`state/rejected`, `resolve`); `plan` preview; per-project pausing; notification modes; recovery and replay without duplicate commits |
+
+Scheduled sync defaults to **five minutes, plus iCloud delivery delay**, with a 120-second quiet period for text edits. Folderwise provides no hosted sync service. See the [task compatibility details](docs/obsidian.md#task-format-compatibility).
+
+**[Quick Start →](docs/obsidian.md#quick-start)** · [Full Obsidian + iCloud guide](docs/obsidian.md) · [See the task round trip](docs/obsidian.md#complete-and-reopen-from-iphone) · [Acceptance checklist](docs/ibridge-testing.md) · [0.2.0 acceptance record](docs/ibridge-acceptance-0.2.0.md)
 
 <details>
 <summary>Browse your knowledge on the desktop, too</summary>

@@ -4,6 +4,53 @@ The optional **folderwise-ibridge** keeps your project repositories on your Mac 
 
 The bridge is deliberately simple: checking means complete; unchecking means incomplete. It does **not** interpret a task, confirm evidence, or establish that the described action happened. Task changes do not advance `last_verified`. Project adapters must implement this same boolean behavior without fabricating evidence. A project can additionally accept task **renames** from the phone; see [Rename tasks from iPhone](#rename-tasks-from-iphone-opt-in). Selected notes can accept **text edits** too; see [Edit notes from iPhone](#edit-notes-from-iphone-opt-in).
 
+## Quick Start
+
+Goal: tick a task in Obsidian on your iPhone and watch it become a local, reviewable Git commit on your Mac, in about five minutes plus iCloud delivery time. Use fictional data first.
+
+### Prerequisites
+
+* A Mac that stays logged in: the scheduled job is a macOS LaunchAgent. Linux can run foreground-only with `--no-schedule`; Windows and Android are unsupported.
+* Python 3.10+, [uv](https://docs.astral.sh/uv/getting-started/installation/) and Git with a configured author identity.
+* A Folderwise checkout (see [Getting started](../README.md#-getting-started)) with at least one project whose files are committed; only tracked files are exported.
+* An iPhone and the Mac on the same Apple account with iCloud Drive on, and the Obsidian app on the iPhone (validated: Obsidian 1.14.5, iOS 27.0.1).
+* The community **Tasks** plugin in Obsidian (validated: 8.6.0), installed from Obsidian's own plugin browser; it is not bundled. Dataview is optional.
+
+### 1. Installation / Setup
+
+```sh
+cd ~/folderwise                         # your Folderwise checkout
+VAULT="$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Folderwise"
+uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$VAULT" --dry-run   # preview; changes nothing
+uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$VAULT"             # export, enroll projects, first sync, register schedule
+```
+
+Setup enrolls every existing project that has no explicit setting (commit pending edits in them first) and makes future `new_project.py` projects join by default. See [Explicit setup](#explicit-setup-and-reusable-vault-defaults) for what it writes and [Uninstall](#uninstall-or-remove-the-supplied-defaults) to undo it.
+
+### 2. Run the Main Feature
+
+```sh
+uv run _tools/icloud_bridge.py status    # last_run.ok is true and schedule.enabled is true
+uv run _tools/icloud_bridge.py doctor    # prints "OK ..." and exits 0
+uv run _tools/icloud_bridge.py plan      # optional: read-only preview of any pending phone edit
+git -C ~/folderwise/my-project log -3 --format='%h %s'   # one of your projects
+```
+
+* **On the iPhone:** open the iCloud vault `Folderwise` in Obsidian, turn off Restricted mode, enable **Tasks**, open `Tasks.md` in reading mode and tick one open task.
+* **Wait** for iCloud delivery and the next scheduled run (up to the interval plus delivery time). Do not run `sync` by hand.
+* **Confirm the commit:** the project's `git log` shows `Update task completion from Obsidian` with the trailers `Bridge: folderwise-ibridge` and `Bridge-Ops: toggle=1 rename=0`. The task is now checked in the source note, and `_folderwise-sync-status.md` in the vault lists the commit under **Recent imports**. Nothing is pushed.
+
+### 3. Key Configuration Knobs
+
+| Parameter / Flag | Default | Description |
+| :--- | :--- | :--- |
+| `configure --interval-minutes N` | `5` | Scheduled run interval. Run `schedule-enable` afterwards to reload the job. |
+| `configure --edit-settle-seconds N` | `120` | Quiet period: edited text must stay unchanged this long (across two runs) before it is imported; plain checkbox toggles import immediately. |
+| `configure --notifications MODE` | `errors` | `off`, `errors` (alerts only) or `imports` (also a counts-only note per run that applied phone edits). |
+| `folderwise-ibridgerename: true` in a project's `.docs.yaml`; `configure --text-edits on` plus `folderwise-ibridgeedit` patterns | off | Per-project opt-in to rename tasks from the phone; bridge-wide switch plus per-project note patterns to edit copied notes. |
+
+Next: [how tasks round trip](#complete-and-reopen-from-iphone), [supported task formats](#task-format-compatibility), [rename](#rename-tasks-from-iphone-opt-in) and [note edits](#edit-notes-from-iphone-opt-in), [CSV adapters](#authoritative-csvs-and-project-adapters), [conflicts and recovery](#conflicts-and-recovery), and the [real-iPhone acceptance record](ibridge-acceptance-0.2.0.md).
+
 ## From Mac files to your phone
 
 Folderwise is a Markdown-and-Git knowledge framework, not a standalone iPhone app. **Obsidian** provides the phone interface; the optional bridge connects selected exports to your local repositories. Folderwise provides no hosted sync service.
@@ -128,9 +175,9 @@ Generated-view text edits (including automatic date insertion), structural recur
 
 Handwritten task checkboxes and metadata may also be edited in copied source documents. Broader text edits, new task lines, child creation/deletion/reparenting and plugin recurrence inside a copied note require the note-edit opt-in below. Generated blocks stay protected and adapter-managed records must use mapped views. Creating arbitrary tasks, moving/reordering generated rows, phone-created documents, source file deletions/renames and attachment imports remain unsupported. Missing exported files are restored from Mac; phone file deletion never deletes a source document.
 
-Run `doctor` after setup or plugin upgrades. It reports the installed Tasks version, serialization format and custom status types, warns about a non-empty global filter or a version outside the compatibility fixtures, and does not overwrite user settings. Existing settings are retained. Fresh defaults keep automatic lifecycle dates off for compatibility with boolean-only adapters; enable them only when the relevant adapters advertise date support. Dataview remains optional; its metadata format is supported, and its own TASK-query behavior needs the real-device acceptance test.
+Run `doctor` after setup or plugin upgrades. It reports the installed Tasks version, serialization format and custom status types, warns about a non-empty global filter or a version outside the compatibility fixtures, and does not overwrite user settings. Existing settings are retained. Fresh defaults keep automatic lifecycle dates off for compatibility with boolean-only adapters; enable them only when the relevant adapters advertise date support. Dataview remains optional. Its inline-field metadata format is supported and was exercised on a real iPhone through the Tasks plugin's Dataview format ([acceptance row 2.7](ibridge-acceptance-0.2.0.md#2-dates-and-priorities)); no acceptance row exercises Dataview's own query engine.
 
-An upgrade accepts pending schema-2 edits when their source identity can be verified against the exact source snapshot. Ambiguous or concurrently changed old mappings require review and retain the phone text. See [the release acceptance checklist](ibridge-testing.md) before using production data; passing CLI fixtures does not certify actual iCloud delivery or an iPhone app version.
+An upgrade accepts pending schema-2 edits when their source identity can be verified against the exact source snapshot. Ambiguous or concurrently changed old mappings require review and retain the phone text. See [the release acceptance checklist](ibridge-testing.md) before using production data; passing CLI fixtures does not certify actual iCloud delivery or an iPhone app version. The 0.2.0 real-iPhone results, and how to reproduce them, are in the [acceptance record](ibridge-acceptance-0.2.0.md).
 
 ### Rename tasks from iPhone (opt-in)
 
@@ -403,7 +450,7 @@ Export uses a local journal (`export.json`) so interrupted copies can finish on 
 
 For a blocked export journal, disable scheduling first. Back up the entire private bridge-state directory and affected source/vault files. Inspect the journal's `writes`, `removes`, and proposed `state`: either restore destinations to their recorded `before` bytes and sources to the intended hashes, then rerun `sync`; or finish the intended export manually and restore the matching proposed state after review. Do not simply delete a journal after partial export: some files may already have advanced. The journal contains private paths and document baselines; never post it publicly.
 
-Only the Mac job owns Git operations. It does not treat iCloud as a Git-aware coordinator. Avoid editing the same source record simultaneously from multiple Macs; the existing Synology one-writer rule still applies. The source check/fast-forward and vault hash checks catch common concurrent edits, but cloud delivery is asynchronous. A full end-to-end acceptance test requires your iPhone: complete a fictional Markdown and CSV-backed task, verify their local commits, reopen both from the completed view, and inspect the status report before using production data.
+Only the Mac job owns Git operations. It does not treat iCloud as a Git-aware coordinator. Avoid editing the same source record simultaneously from multiple Macs; the existing Synology one-writer rule still applies. The source check/fast-forward and vault hash checks catch common concurrent edits, but cloud delivery is asynchronous. A full end-to-end acceptance test requires your iPhone: complete a fictional Markdown and CSV-backed task, verify their local commits, reopen both from the completed view, and inspect the status report before using production data. The [0.2.0 acceptance record](ibridge-acceptance-0.2.0.md) lists the real-iPhone cases already run, with a reproducible fixture set.
 
 ## Obsidian navigation
 
