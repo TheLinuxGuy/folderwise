@@ -130,7 +130,7 @@ Handwritten task checkboxes and metadata may also be edited in copied source doc
 
 Run `doctor` after setup or plugin upgrades. It reports the installed Tasks version, serialization format and custom status types, warns about a non-empty global filter or a version outside the compatibility fixtures, and does not overwrite user settings. Existing settings are retained. Fresh defaults keep automatic lifecycle dates off for compatibility with boolean-only adapters; enable them only when the relevant adapters advertise date support. Dataview remains optional; its metadata format is supported, and its own TASK-query behavior needs the real-device acceptance test.
 
-An upgrade accepts pending schema-2 edits when their source identity can be verified against the exact source snapshot. Ambiguous or concurrently changed old mappings require review and retain the phone text. See [the release acceptance checklist](ibridge-testing.md) before using production data; passing CLI fixtures does not certify actual iCloud delivery or an iPhone app version.
+An upgrade accepts pending schema-2 edits when their source identity can be verified against the exact source snapshot. Ambiguous or concurrently changed old mappings require review and retain the phone text. See [the release acceptance checklist](ibridge-testing.md) before using production data; passing CLI fixtures does not certify actual iCloud delivery or an iPhone app version. The [Folderwise 0.2.0 acceptance record](ibridge-acceptance-0.2.0.md) lists what a real iPhone run did and did not validate, including the tested iOS, Obsidian and Tasks versions.
 
 ### Rename tasks from iPhone (opt-in)
 

@@ -25,15 +25,19 @@ You solved it once. Keep the instructions, the evidence, and the decisions somew
 
 ## 🆕 What's new
 
-**[Folderwise 0.1.0](https://github.com/TheLinuxGuy/folderwise/releases/tag/v0.1.0): the first release.**
+**[Folderwise 0.2.0](https://github.com/TheLinuxGuy/folderwise/releases/tag/v0.2.0): your projects on iPhone, accepted on a real device.**
 
-- 📦 **Downloadable releases.** Zip and tar.gz archives with `SHA256SUMS`, built from one recorded commit and extracted and tested on Linux and macOS before they are offered. Cloning is still recommended; archives have no Git history.
-- ✅ **Tested on every change.** 400+ tool and public-documentation checks run on Linux (Python 3.10 and 3.15) and macOS (Python 3.15), with a clean-machine install check and 85% production line coverage required.
-- 🛡️ **Guarded framework repository.** Only approved framework files can enter it; your knowledge projects, caches and credentials cannot.
-- 🔁 **Safe archive upgrades.** Step-by-step, no overwrite, no reset, and your projects are never touched: [upgrading an archive install](docs/framework-checkout.md#upgrading-an-archive-install).
-- 🪟 **Platforms.** Linux and macOS. Native Windows is not supported; use WSL.
+- 📱 **Optional iPhone and Obsidian bridge.** A scheduled macOS LaunchAgent exports selected files to a separate iCloud vault. Tick tasks in Obsidian on iPhone and your Mac validates them and makes a local Git commit with provenance. The Mac owns Git; the phone never pushes.
+- ✅ **Tested on a real iPhone.** An 88-row acceptance run on real hardware: 85 passed, 3 need a physical check, none failed. Read the [reproducible acceptance record](docs/ibridge-acceptance-0.2.0.md).
+- 🧩 **Obsidian Tasks 8.x.** Dates, priorities, statuses (in progress, cancelled, custom), recurrence, on-completion delete, task IDs and dependencies, in emoji and Dataview formats. Tags, links and Unicode are preserved.
+- 🌲 **Subtasks and notes.** Nested, quoted and callout tasks toggle independently. Opt-in task renames, and opt-in edits to copied notes, including creating, moving and deleting child tasks.
+- 🗃️ **CSV-backed tasks.** Project adapters declare what they can store: boolean-only adapters reject extra fields by name, rich adapters accept dates, statuses, recurrence and deletion.
+- 🛡️ **Safe by design.** A rejected phone edit is contained, restored, reported once and recoverable. A problem pauses only the affected project, `plan` previews phone edits, and a Mac change is never silently overwritten.
+- 📦 **Minimal pull-only checkout.** An opt-in, framework-only clone that updates with a normal pull; see [Getting started](#-getting-started).
 
-See the [release notes](https://github.com/TheLinuxGuy/folderwise/releases/tag/v0.1.0) for the full list of changes.
+**Earlier release:** [Folderwise 0.1.0](https://github.com/TheLinuxGuy/folderwise/releases/tag/v0.1.0) added downloadable release archives with `SHA256SUMS`, CI on Linux and macOS, a guarded framework repository and [safe archive upgrades](docs/framework-checkout.md#upgrading-an-archive-install).
+
+**Platforms:** macOS and Linux for the framework; the iPhone bridge needs a Mac. Native Windows is not supported; use WSL. See the [0.2.0 release notes](https://github.com/TheLinuxGuy/folderwise/releases/tag/v0.2.0) for the full list of changes.
 
 ## 🚀 Getting started
 
@@ -109,11 +113,24 @@ Every tool, flag and setting is documented in the [full guide](docs/guide.md).
 - **Rename tasks** with per-project opt-in, or **edit selected notes** with both the bridge text-edit switch and project path-pattern opt-in. Generated task views accept only supported task edits.
 - **Keep a local history.** An available Mac validates imports against clean working trees and conflict rules, updates source files, and commits locally. Local commits do not push to GitHub.
 
-The iPhone bridge supports nested and quoted tasks, Tasks dates/priorities and custom statuses, and plugin-generated recurrence. See the [task compatibility and acceptance requirements](docs/obsidian.md#task-format-compatibility).
+### 🧪 Validated in 0.2.0
 
-Scheduled sync defaults to **five minutes, plus iCloud delivery delay**. Folderwise provides no hosted sync service.
+Checked on a real iPhone with fictional data. Everything here is opt-in and local.
 
-**[Set up Obsidian + iCloud →](docs/obsidian.md)** · [See the task round trip](docs/obsidian.md#complete-and-reopen-from-iphone) · [Acceptance checklist](docs/ibridge-testing.md)
+| ✅ You can | 📌 How it behaves |
+|---|---|
+| Tick and untick tasks | Markdown and CSV-backed tasks; each import is one local Git commit with `Bridge:` provenance and no task text |
+| Use Tasks 8.x metadata | Due, start and scheduled dates; priorities; in-progress, cancelled and custom statuses; recurrence; on-completion delete; IDs and dependencies; emoji and Dataview formats |
+| Work with subtasks | Nested, quoted and callout tasks; parents and children toggle independently |
+| Rename tasks, edit notes | Per-project opt-in renames; opt-in edits to copied notes (create, move and delete child tasks) |
+| Use CSV adapters | Boolean-only adapters reject unsupported fields by name; rich adapters declare what they can store |
+| Recover from mistakes | Rejected edits are restored, reported once and kept in `state/rejected`; `plan` previews, `resolve` recovers, and one project's problem pauses only that project |
+
+Scheduled sync defaults to **five minutes, plus iCloud delivery delay**, and typed text edits must stay unchanged for a **120-second quiet period** across two runs before import (plain checkbox toggles import right away). Folderwise provides no hosted sync service.
+
+Not claimed: Android, Windows or a bridge host other than macOS, and any versions other than those recorded in the [acceptance record](docs/ibridge-acceptance-0.2.0.md), which also lists three physical checks still open. See also the [task compatibility details](docs/obsidian.md#task-format-compatibility).
+
+**[Set up Obsidian + iCloud →](docs/obsidian.md)** · [See the task round trip](docs/obsidian.md#complete-and-reopen-from-iphone) · [0.2.0 acceptance record](docs/ibridge-acceptance-0.2.0.md) · [Acceptance checklist](docs/ibridge-testing.md)
 
 <details>
 <summary>Browse your knowledge on the desktop, too</summary>
