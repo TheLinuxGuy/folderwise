@@ -50,7 +50,7 @@ git config core.hooksPath _tools/framework-hooks
 uv run _tools/new_project.py
 ```
 
-Choose a topic, describe its purpose, and set its sensitivity. Folderwise creates its Git repository, starter files, and an agent setup prompt. Give that prompt to Codex or Claude Code to shape the project, or edit the files yourself.
+Choose a topic, describe its purpose, and set its sensitivity. Folderwise creates its Git repository, starter files, and an agent setup prompt. The first commit welcomes you and records the Folderwise version and GitHub link. Give that prompt to Codex or Claude Code to shape the project, or edit the files yourself.
 
 
 | | 🌱 Clone (recommended) | 📦 Release archive |
