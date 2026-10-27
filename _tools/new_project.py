@@ -33,6 +33,39 @@ BASE = TOOLS.parent
 TEMPLATE = BASE / "_template"
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 SKIP = {"_doc-template.md"}  # copied verbatim, no placeholders to fill
+VERSION_RE = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?"
+
+
+def framework_version() -> str:
+    """Identify this installation without borrowing a containing repository's version."""
+    if (BASE / ".git").exists():
+        result = subprocess.run(
+            ["git", "describe", "--tags", "--match", "v[0-9]*", "--long", "--always", "--dirty"],
+            cwd=BASE, capture_output=True, text=True,
+        )
+        description = result.stdout.strip()
+        if result.returncode == 0 and description:
+            release = re.fullmatch(rf"v({VERSION_RE})-0-g[0-9a-f]+", description)
+            return release[1] if release else f"development ({description})"
+    else:
+        try:
+            info = json.loads((BASE / "RELEASE-INFO.json").read_text())
+            version = info.get("version") if isinstance(info, dict) else None
+            if isinstance(version, str) and re.fullmatch(VERSION_RE, version):
+                return version
+        except (OSError, ValueError):
+            pass
+    return "unknown (version metadata unavailable)"
+
+
+def creation_message() -> str:
+    return (
+        f"Create knowledge project with Folderwise {framework_version()}\n\n"
+        "This repository was created with Folderwise, a Markdown-and-Git\n"
+        "framework for knowledge that humans read and AI agents help maintain.\n\n"
+        "https://github.com/TheLinuxGuy/folderwise\n\n"
+        "Make yourself at home. Your knowledge grows from here."
+    )
 
 
 def ask(prompt: str, default: str | None = None) -> str:
@@ -147,7 +180,7 @@ def main() -> int:
     dl.install_hook(dest, TOOLS)
     if not args.no_commit:
         run(dest, "git", "add", "-A")
-        run(dest, "git", "commit", "-q", "-m", "Scaffold project from template",
+        run(dest, "git", "commit", "-q", "-m", creation_message(),
             "-m", f"Agent: {args.by.split('/')[0]}" + (f"\nModel: {args.by.split('/')[1]}" if "/" in args.by else ""))
     print(f"created {dest}")
     prompt = setup_prompt(name, description)

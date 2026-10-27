@@ -27,6 +27,25 @@ Makes the folder, its own git repo (branch `main`), shared agent rules, the pre-
 cd ~/folderwise && uv run _tools/new_project.py --name homelab-inventory --description "Inventory of home network hardware and software to allow for homelab v3 planning" --sensitivity private --by human
 ```
 
+The first commit records how the repository began:
+
+```text
+Create knowledge project with Folderwise {version}
+
+This repository was created with Folderwise, a Markdown-and-Git
+framework for knowledge that humans read and AI agents help maintain.
+
+https://github.com/TheLinuxGuy/folderwise
+
+Make yourself at home. Your knowledge grows from here.
+
+Agent: human
+```
+
+`{version}` comes from this installation: a clean checkout at a release tag records that version (including prereleases); other Git checkouts record `development (...)` with the Git description, including the commit and a `dirty` suffix for tracked local edits. A checkout without release tags records its commit hash. Release archives read the version from `RELEASE-INFO.json`. Missing or invalid metadata records `unknown (version metadata unavailable)` without blocking creation. An enclosing repository never supplies the version. Git metadata takes precedence over any leftover archive metadata.
+
+The Git author remains your configured identity. `--by <agent>/<model>` retains the `Agent:` and `Model:` trailers. `--no-commit` creates the scaffold without an initial commit. Later framework updates do not rewrite this creation record.
+
 Prefer to be asked the questions instead:
 
 ```bash

@@ -146,6 +146,87 @@ def s_create():
     check("fresh project lints clean", rc == 0, out)
 
 
+def s_create_version():
+    """Inspect real first commits from clone, worktree and archive installations."""
+    sandbox = CTX['root'] / 'creation-version'
+    source = sandbox / 'framework'
+    for name in ('_tools', '_template'):
+        shutil.copytree(CTX['root'] / name, source / name, ignore=shutil.ignore_patterns('__pycache__'))
+
+    def g(*args, cwd=source):
+        rc, out = sh(['git', *args], cwd=cwd)
+        if rc:
+            raise RuntimeError(out)
+        return out.strip()
+
+    def create(name, expected, *, base=source, extra=()):
+        rc, out = sh(['uv', 'run', '--quiet', str(base / '_tools/new_project.py'),
+                      '--name', name, '--description', 'Fictional provenance test', '--no-prompt', *extra], cwd=base)
+        if '--no-commit' in extra:
+            log_rc, _ = sh(['git', 'rev-parse', '--verify', 'HEAD'], cwd=base / name)
+            check('--no-commit still creates an uncommitted project', rc == 0 and log_rc != 0, out)
+            return
+        message = g('log', '-1', '--format=%B', cwd=base / name) if rc == 0 else ''
+        attribution = 'Agent: codex\nModel: selftest' if '--by' in extra else 'Agent: human'
+        wanted = (
+            f'Create knowledge project with Folderwise {expected}\n\n'
+            'This repository was created with Folderwise, a Markdown-and-Git\n'
+            'framework for knowledge that humans read and AI agents help maintain.\n\n'
+            'https://github.com/TheLinuxGuy/folderwise\n\n'
+            'Make yourself at home. Your knowledge grows from here.\n\n' + attribution
+        )
+        check(f'creation message: {name}', rc == 0 and message == wanted, out + message)
+        check(f'creation preserves Git author: {name}',
+              rc == 0 and g('log', '-1', '--format=%an <%ae>', cwd=base / name) == 'selftest <t@t>', message)
+
+    unknown = 'unknown (version metadata unavailable)'
+    create('no-metadata', unknown)
+    info = source / 'RELEASE-INFO.json'
+    for name, content, expected in (
+        ('archive', json.dumps({'version': '1.2.3'}), '1.2.3'),
+        ('archive-prerelease', json.dumps({'version': '1.2.3-rc.1'}), '1.2.3-rc.1'),
+        ('bad-json', '{', unknown), ('wrong-shape', '[]', unknown), ('missing-version', '{}', unknown),
+        ('wrong-type', '{"version": 123}', unknown),
+        ('bad-version', json.dumps({'version': '1.2.3\nInjected'}), unknown),
+    ):
+        info.write_text(content)
+        create(name, expected)
+    # An enclosing repository must never supply an archive's version.
+    g('init', '-q', '-b', 'main', cwd=sandbox)
+    (sandbox / 'sentinel').write_text('parent\n')
+    g('add', 'sentinel', cwd=sandbox)
+    g('commit', '-q', '-m', 'Fictional parent', cwd=sandbox)
+    g('tag', 'v9.9.9', cwd=sandbox)
+    info.unlink()
+    create('inside-parent', unknown)
+
+    g('init', '-q', '-b', 'main')
+    create('unborn', unknown)
+    (source / '.gitignore').write_text('__pycache__/\n')
+    g('add', '.gitignore', '_tools', '_template')
+    g('commit', '-q', '-m', 'Fictional framework')
+    describe = g('describe', '--tags', '--long', '--always', '--dirty')
+    create('untagged', f'development ({describe})')
+    g('tag', 'v1.2.3')
+    info.write_text('{"version": "9.9.9"}')
+    create('release', '1.2.3', extra=('--by', 'codex/selftest'))
+    tracked = source / '_tools/new_project.py'
+    tracked.write_text(tracked.read_text() + '\n# Fictional local change\n')
+    describe = g('describe', '--tags', '--long', '--always', '--dirty')
+    create('dirty', f'development ({describe})')
+    g('add', '_tools/new_project.py')
+    g('commit', '-q', '-m', 'Fictional development')
+    describe = g('describe', '--tags', '--long', '--always', '--dirty')
+    create('after-release', f'development ({describe})')
+    g('tag', 'v1.3.0-rc.1')
+    create('tagged-prerelease', '1.3.0-rc.1')
+    create('skip-commit', '', extra=('--no-commit',))
+    worktree = sandbox / 'worktree'
+    g('worktree', 'add', '--detach', str(worktree), 'HEAD')
+    create('worktree-release', '1.3.0-rc.1', base=worktree)
+    shutil.rmtree(sandbox)
+
+
 def s_new_doc_and_index():
     rc, out = tool("docs_new.py", "docs/hosts/nas.md", "--type", "inventory", "--title", "NAS inventory",
                    "--about", "Disks and shares", "--by", "codex/selftest")
@@ -3223,7 +3304,7 @@ def s_ibridge_setup():
 
 
 SECTIONS = [
-    ("create", s_create), ("new_doc", s_new_doc_and_index), ("stamp", s_stamp_and_hook), ("hook", s_hook_fail_closed),
+    ("create", s_create), ("new_doc", s_new_doc_and_index), ("create_version", s_create_version), ("stamp", s_stamp_and_hook), ("hook", s_hook_fail_closed),
     ("lint", s_lint_rules), ("timezone", s_timezone), ("links", s_links), ("staged_source", s_staged_source), ("markdown_fences", s_markdown_fences), ("toc", s_toc), ("mv", s_mv),
     ("tables", s_tables), ("stale", s_stale_index_recent), ("sync", s_sync),
     ("ibridge_tasks", s_ibridge_tasks), ("ibridge_rich_adapter", s_ibridge_rich_adapter), ("ibridge", s_ibridge), ("ibridge_rename", s_ibridge_rename), ("ibridge_isolation", s_ibridge_isolation), ("ibridge_notes", s_ibridge_notes), ("ibridge_transient", s_ibridge_transient), ("ibridge_status", s_ibridge_status), ("ibridge_setup", s_ibridge_setup), ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache),
