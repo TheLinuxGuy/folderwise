@@ -447,6 +447,8 @@ The root `.gitignore` ignores every root entry unless explicitly allowed. The pu
 
 ## Optional Obsidian and iCloud bridge
 
+**Required on the syncing Mac:** enable Finder’s **Keep Downloaded** for the entire destination iCloud vault, including hidden `.obsidian` settings. Setup does not configure or verify this preference; Download Now alone does not ensure retention. Follow the [required local-availability setup and verification](obsidian.md#required-keep-the-entire-vault-downloaded-on-the-mac) before relying on unattended phone imports.
+
 Read selected project documents in **Obsidian on iPhone** and complete or reopen tasks across projects. Folderwise remains a Markdown-and-Git framework: repositories stay outside iCloud, and a separate vault holds exported copies. Task renaming is a per-project opt-in; selected-note editing needs both the bridge text-edit switch and project path patterns. CSV-backed tasks need an adapter with the relevant capabilities. Generated task views accept supported task edits, not arbitrary document edits.
 
 An available Mac validates imports against clean-working-tree and conflict rules and creates **local Git commits**, never automatic GitHub pushes. The five-minute default schedule has additional iCloud delivery delay; note edits also have a quiet period. Folderwise provides no hosted sync service. Want it running in five minutes? Follow the [Quick Start](obsidian.md#quick-start). [See the workflow and real iPhone examples](obsidian.md#from-mac-files-to-your-phone), then follow the setup below.

@@ -27,6 +27,8 @@ uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$VAULT"     
 
 Setup enrolls every existing project that has no explicit setting (commit pending edits in them first) and makes future `new_project.py` projects join by default. See [Explicit setup](#explicit-setup-and-reusable-vault-defaults) for what it writes and [Uninstall](#uninstall-or-remove-the-supplied-defaults) to undo it.
 
+Before relying on scheduled imports, complete [Keep Downloaded](#required-keep-the-entire-vault-downloaded-on-the-mac) for the newly created vault. Setup does not enable or verify this Finder setting.
+
 ### 2. Run the Main Feature
 
 ```sh
@@ -74,9 +76,22 @@ Generated task views have stricter rules than opted-in copied notes: they are ta
 
 Use one vault for all project folders. Your source parent remains outside iCloud, for example `~/folderwise/`, with independent project repositories underneath. Create a **separate** vault in Obsidian under `iCloud Drive/Obsidian/Folderwise`. Do not move the source repositories, put Git history in the vault, or synchronize that vault with a second cloud service.
 
-Use the same Apple account on Mac and iPhone and enable iCloud Drive. Keep the Mac vault downloaded. Obsidian's [official sync guide](https://help.obsidian.md/sync-notes) covers device setup. The bridge cannot force iCloud to deliver a change immediately or prove another device received it.
+Use the same Apple account on Mac and iPhone and enable iCloud Drive. The Mac vault must have **Keep Downloaded** enabled in Finder; see the [required local-availability step](#required-keep-the-entire-vault-downloaded-on-the-mac). Obsidian's [official sync guide](https://help.obsidian.md/sync-notes) covers device setup. The bridge cannot force iCloud to deliver a change immediately or prove another device received it.
 
 The Mac needs Git, uv, the Folderwise tools, a configured Git author, and an active login session for scheduled operation. Only committed, tracked project files are eligible for export; commit new documents on Mac before expecting them on iPhone. Never commit credentials merely to make them eligible. Existing source edits can be read, but pending phone imports wait until that project's working tree and index are clean.
+
+## Required: keep the entire vault downloaded on the Mac
+
+On the Mac running the scheduled bridge, **Keep Downloaded is a required manual setup step**. Apply it to the entire destination iCloud vault, including `_Folderwise Tasks`, copied notes and the hidden `.obsidian` settings/plugins folder. Pinning only `Tasks.md` is insufficient: the bridge also reads task views and Tasks plugin settings before importing edits. Source repositories and bridge state must remain outside iCloud.
+
+1. In Finder, locate the destination vault under **iCloud Drive → Obsidian** (for example, `Folderwise`). If setup has not created it yet, complete setup first and return here before relying on scheduled imports.
+2. Control-click the **vault folder** and choose **Keep Downloaded**. Use **Download Now** as well if files are still cloud-only, and wait for downloads to finish. Download Now alone is a one-time download, not a persistent retention setting.
+3. Check the folder's iCloud status in Finder and open a representative note and generated task view on the Mac. Recheck this requirement after recreating or moving the vault or setting up another Mac. A successful read proves current availability, not persistent pinning.
+4. Run `doctor`, `plan` and `status` with your installation's `--config` path if applicable. Then complete the [real-iPhone acceptance check](ibridge-testing.md#1-preflight): a phone checkbox edit must reach the source through the scheduled job. These commands do not verify Finder's Keep Downloaded preference.
+
+See Apple's [download and retention instructions](https://support.apple.com/guide/mac-help/mchl1a02d711/mac) and [iCloud status guide](https://support.apple.com/guide/mac-help/mchlc994344b/mac). If Keep Downloaded is unavailable on your macOS version, do not treat Download Now as equivalent; resolve persistent local availability before relying on unattended imports. Allow disk space for the entire vault, including plugins and files outside the bridge's managed-size estimate.
+
+**Automation limitation:** Folderwise currently neither sets nor verifies persistent pinning. Apple's documented [`startDownloadingUbiquitousItem(at:)`](https://developer.apple.com/documentation/foundation/filemanager/startdownloadingubiquitousitem(at:)) requests a download; that is not a documented guarantee of Finder's Keep Downloaded retention policy. We have not identified a supported public API for setting that policy for this external Obsidian vault. Setup therefore requires the Finder step rather than relying on undocumented file attributes or private utilities. Keeping files local reduces availability failures; it does not guarantee immediate iCloud delivery or prevent every file lock.
 
 ## Explicit setup and reusable vault defaults
 
@@ -444,7 +459,14 @@ uv run _tools/icloud_bridge.py resolve "alpha/docs/checklist.md"    # saves the 
 
 `resolve <path>` saves the exact phone text under the bridge state's private `rejected/` folder (kept 30 days) and puts the last exported version back, so the paused project resumes on the next sync. It refuses a path with no pending phone edit and never touches your source repositories.
 
-If iCloud briefly locks a file while it syncs (for example "Resource deadlock avoided"), the run is deferred and retried quietly; only the third consecutive failure is reported. After a bridge-wide freeze: read `_folderwise-sync-status.md` and local logs; preserve the edited vault file outside managed paths, resolve the corresponding source on Mac, then restore the exported file to its previous baseline or apply only the intended checkbox change. Do not erase bridge state to make a conflict disappear.
+If iCloud briefly locks a file while it syncs (for example "Resource deadlock avoided"), the run is deferred and retried quietly; only the third consecutive failure is reported. Repeated failures can also coincide with cloud-only placeholders whose contents are not available locally. The error alone does not prove offloading is the cause. A loaded schedule or a successful process exit does not prove an import succeeded; check `status`, `last-run.json` and the source commit.
+
+For persistent availability errors:
+
+1. Preserve readable pending phone edits outside the managed vault and retain bridge state, logs and `rejected/` recovery copies. Do not erase state or overwrite the phone view to clear the error.
+2. Confirm the [required Keep Downloaded setting](#required-keep-the-entire-vault-downloaded-on-the-mac) on the whole vault, including `.obsidian`, and wait for downloads. Check iCloud connectivity and available Mac disk space if files remain unavailable.
+3. Run `doctor` and `plan` using the installed configuration. Review any rejected edits, conflicts or proposed cleanup before syncing. A successful preview is not proof of delivery to the phone.
+4. Let the scheduled job retry, then verify a recent successful `status`, the expected source edit and its local commit. For recovery outside an acceptance test, a reviewed foreground `sync` is also available. If failures persist with readable files, inspect logs and investigate the named file or project conflict; do not assume pinning fixes every cause.
 
 Export uses a local journal (`export.json`) so interrupted copies can finish on a later run. Replay proceeds only when each destination still matches the old or intended bytes and each source payload remains unchanged. If either side changed, it stops and preserves the files. Keep independent backups of your source repositories.
 

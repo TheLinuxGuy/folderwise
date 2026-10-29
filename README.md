@@ -124,6 +124,8 @@ Validated on a real iPhone for 0.2.0 ([88 checks, 85 pass, 3 blocked](docs/ibrid
 | 🧾 **CSV adapters** | Boolean-only and rich adapters, with unsupported fields rejected by name |
 | 🛡️ **Safety** | Rejected edits are contained, restored, reported once and recoverable (`state/rejected`, `resolve`); `plan` preview; per-project pausing; notification modes; recovery and replay without duplicate commits |
 
+**Required on the syncing Mac:** set the entire iCloud vault to **Keep Downloaded** in Finder. Setup does not enable this automatically; see the [required setup step](docs/obsidian.md#required-keep-the-entire-vault-downloaded-on-the-mac).
+
 Scheduled sync defaults to **five minutes, plus iCloud delivery delay**, with a 120-second quiet period for text edits. Folderwise provides no hosted sync service. See the [task compatibility details](docs/obsidian.md#task-format-compatibility).
 
 **[Quick Start →](docs/obsidian.md#quick-start)** · [Full Obsidian + iCloud guide](docs/obsidian.md) · [See the task round trip](docs/obsidian.md#complete-and-reopen-from-iphone) · [Acceptance checklist](docs/ibridge-testing.md) · [0.2.0 acceptance record](docs/ibridge-acceptance-0.2.0.md)
