@@ -112,7 +112,7 @@ Every tool, flag and setting is documented in the [full guide](docs/guide.md).
 - **Keep a local history.** An available Mac validates imports against clean working trees and conflict rules, updates source files, and commits locally. Local commits do not push to GitHub.
 
 <p align="center">
-  <img src="docs/assets/ibridge-iphone-sync-status.png" alt="Obsidian on iPhone showing a completed Mac sync and an amber warning with instructions for recovering earlier rejected phone edits" width="360">
+  <img src="docs/assets/ibridge-iphone-sync-status.png" alt="Obsidian on iPhone showing the last Mac sync, phone edit recovery, rejection history, and collapsed Export details above Issues" width="360">
 </p>
 
 The [sync status note](docs/obsidian.md#bridge-status-report) shows when the Mac last ran and whether that run reported issues. Earlier rejected edits appear separately.
