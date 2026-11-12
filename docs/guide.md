@@ -456,8 +456,8 @@ An available Mac validates imports against clean-working-tree and conflict rules
 A fresh Folderwise installation creates no Obsidian vault and leaves bridge sync off. Run `icloud_bridge.py setup` to initialize a local parent vault and a separate iCloud vault with reviewed defaults, enroll existing unconfigured projects, set the default for future `new_project.py` projects, perform the first sync and enable the Mac schedule. The default interval is five minutes. See [the full setup, defaults, uninstall and recovery guide](obsidian.md).
 
 ```sh
-uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Folderwise" --dry-run
-uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Folderwise"
+uv run _tools/icloud_bridge.py setup --icloud --dry-run
+uv run _tools/icloud_bridge.py setup --icloud
 uv run _tools/icloud_bridge.py configure --mode lean --interval-minutes 5
 uv run _tools/icloud_bridge.py plan            # previews pending toggles, renames, fields, recurrence and deletion
 uv run _tools/icloud_bridge.py sync
@@ -470,6 +470,7 @@ uv run _tools/icloud_bridge.py logs
 uv run _tools/icloud_bridge.py notify-test
 uv run _tools/icloud_bridge.py notify-test --setup-message  # replay setup text with configured interval
 uv run _tools/icloud_bridge.py vault-init
+uv run _tools/icloud_bridge.py vault-init --install-plugins
 uv run _tools/icloud_bridge.py schedule-prepare
 uv run _tools/icloud_bridge.py schedule-disable
 uv run _tools/new_project.py --name offline-notes --description "Local-only notes" --icloud-disabled
@@ -477,7 +478,7 @@ uv run _tools/new_project.py --name offline-notes --description "Local-only note
 
 The `.docs.yaml` setting `folderwise-ibridgesync` is a positive boolean: true enables participation; false or a missing key disables it. Before setup, new projects omit the key and remain disabled. After setup, a persistent private root profile makes new projects write `folderwise-ibridgesync: true`, including when created by another process; `--icloud-disabled` writes false. Setup enrolls existing projects with no setting, preserving explicit false opt-outs and true opt-ins. It commits each enrollment in an isolated clone after hooks pass. Existing project source changes must be committed before enrollment. The enable/disable helpers change a single project's setting without changing the default for future projects.
 
-Reviewed JSON/CSS defaults ship under `_tools/obsidian_defaults/`. Setup writes missing files into both root `.obsidian/` directories, preserving existing settings. It includes core navigation, appearance, graph, property types, a small CSS snippet, plugin IDs and compatible Tasks/Dataview settings. Install community-plugin code through Obsidian; workspace layouts, plugin binaries, private data and live `.obsidian/` directories are not published. `vault-init` can fill missing defaults again. Use `--no-schedule` with setup for a foreground-only or non-Mac installation.
+Reviewed JSON/CSS defaults ship under `_tools/obsidian_defaults/`. Setup fills missing settings in both root `.obsidian/` directories, including core navigation, appearance, graph, property types, a CSS snippet, and Tasks and Dataview settings. `setup --icloud` selects the conventional Mac iCloud vault and installs checksum-verified releases of both plugins there. With explicit paths, add `--install-plugins` to install them, or run `vault-init --install-plugins` for an existing bridge. Open the vault and allow community plugins in Obsidian. Use `--no-schedule` with setup for a foreground-only or non-Mac installation.
 
 Uninstall resets the future-project default, disables the scheduled bridge, and removes only unchanged setup-owned setting files. Customized settings, plugin code, project documents, explicit project flags and recovery state remain intact. The checkout helper supports removal together with optional framework files:
 

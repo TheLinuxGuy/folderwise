@@ -52,6 +52,8 @@ Keep these outside the repository (they contain your fictional fixtures and loca
 
 **Required manual check:** verify Finder’s **Keep Downloaded** setting on the entire iCloud vault on the syncing Mac, including `.obsidian`, and wait for cloud-only files to download. `doctor` and a successful foreground read do not prove persistent pinning. Follow the [local-availability instructions](obsidian.md#required-keep-the-entire-vault-downloaded-on-the-mac). Record this check with the test evidence; automated fixtures cannot verify Finder retention or real iCloud delivery.
 
+**Fresh-vault quickstart check:** with two committed fixture projects, run `setup --icloud` for a new vault. Open it on Mac and iPhone, approve community plugins when prompted, and verify that Tasks and Dataview appear enabled on both devices. Record whether iCloud delivered both installations before using any manual plugin install. Verify that `Tasks.md` renders tasks from both projects, then toggle one on iPhone and confirm that the scheduled import creates the expected local commit.
+
 1. The framework checkout under test is the commit you intend to ship; note its hash.
 2. `uv run _tools/icloud_bridge.py doctor` reports no problems, the schedule is loaded, the interval is the expected five minutes, and `status` shows a recent successful run.
 3. Notifications are set to `errors` (the default); run `uv run _tools/icloud_bridge.py notify-test --setup-message` once and confirm whether a banner appeared (see [the caveat](#notification-caveat)).
