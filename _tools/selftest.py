@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 SRC_TOOLS = Path(__file__).resolve().parent
@@ -2699,6 +2700,30 @@ def s_ibridge_status():
     rc, out = invoke('doctor')
     check('doctor stays healthy after handled rejections', rc == 0, out)
     check('alerts carry no task or document text', 'PHONE-SECRET' not in banners() and all(l.startswith('Folderwise bridge needs attention.') for l in banners().splitlines() if l.strip()), banners())
+
+    # --- rejection history: date ranges and labels --------------------------------------------------------------
+    ledger_file = home / 'ledger.json'
+    saved_ledger = ledger_file.read_text()
+
+    def with_rejections(*entries):
+        # epoch stays current so pruning keeps the entries; "at" is display-only and can be any date
+        ledger = json.loads(saved_ledger)
+        ledger['rejected'] = [dict(at=at, file=name, reason=reason, epoch=time.time()) for at, name, reason in entries]
+        ledger_file.write_text(json.dumps(ledger))
+
+    with_rejections(('2026-12-28 09:00 UTC', '_Folderwise Tasks/alpha.md', 'older reason'),
+                    ('2027-01-02 10:30 UTC', 'alpha/docs/notes.md', 'newest reason'))
+    observe('a rejection range across years names both years and a mirrored note keeps its path', 0,
+            present=['**2 past rejections · Dec 28, 2026–Jan 2, 2027**', '**alpha/docs/notes.md** · Jan 2, 10:30 UTC', 'newest reason',
+                     '> - **_Folderwise Tasks/alpha.md** · 2026-12-28 09:00 UTC'])
+    with_rejections(('2026-10-30 09:00 UTC', '_Folderwise Tasks/alpha.md', 'older reason'),
+                    ('2026-11-02 10:30 UTC', '_Folderwise Tasks/alpha.md', 'newest reason'))
+    observe('a rejection range across months shows both days', 0, present=['**2 past rejections · Oct 30–Nov 2**', '**Alpha** · Nov 2, 10:30 UTC'])
+    with_rejections(('2026-11-03 09:00 UTC', '_Folderwise Tasks/alpha.md', 'older reason'),
+                    ('2026-11-09 10:30 UTC', '_Folderwise Tasks/alpha.md', 'newest reason'))
+    observe('a rejection range within a month shows the day span', 0, present=['**2 past rejections · Nov 3–9**'])
+    ledger_file.write_text(saved_ledger)
+    observe('the original rejection history comes back', 0, present=['Phone edits not applied'])
 
 
 def s_ibridge_tasks():
