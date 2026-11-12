@@ -30,6 +30,7 @@ import unicodedata
 from contextlib import contextmanager, suppress
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote, urlsplit
+from urllib.request import urlopen
 
 import yaml
 
@@ -43,6 +44,22 @@ LAUNCHER_NAME = "folderwise-ibridgesync"
 LAUNCHER_BODY = b'#!/bin/sh\n# Folderwise iCloud bridge launch entry point.\nexec "$@"\n'
 LEGACY_REPORT = "Bridge Status.md"
 REPORT, DASHBOARD, TASK_DIR = "_folderwise-sync-status.md", "Tasks.md", "_Folderwise Tasks"
+ICLOUD_OBSIDIAN = Path("Library/Mobile Documents/iCloud~md~obsidian/Documents")
+COMMUNITY_PLUGINS = ".obsidian/community-plugins.json"
+# Official GitHub release assets, in write order so Obsidian discovers the manifest last.
+PLUGIN_ASSETS = ("main.js", "styles.css", "manifest.json")
+PLUGIN_RELEASES = {
+    "obsidian-tasks-plugin": ("Tasks", "obsidian-tasks-group/obsidian-tasks", "8.6.0", (
+        "500f8106d05ddb483bbfec135cac7948022bf6ba7386d1851b28f4d087866e8f",
+        "d70d8ebd41fc23bfd5d59873b1a93ed9554b154546a3e637bd4e042e62d1cf23",
+        "2efc88df9e973247360d486b420791c266c8824516919303b948d0192e159127",
+    )),
+    "dataview": ("Dataview", "blacksmithgu/obsidian-dataview", "0.5.68", (
+        "794e9eaede73920bb8d54b0eda4f5de2182d698cc638774500f24f14bcd4da0b",
+        "3306dd9032e00f989ba7233a37fd255bc4d3f4340cee661762e952f3f6aa1de9",
+        "9235db47112da81b85591c79ecb9ae2574e5e72207056e976472f90616286185",
+    )),
+}
 IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif", ".heic", ".bmp"}
 SKIP = {"AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", "_doc-template.md", "node_modules", "__pycache__", "#recycle", "credentials.json", "id_rsa", "id_ed25519"}
 CHECKBOX = taskfmt.CHECKBOX
@@ -428,7 +445,12 @@ def inventory(settings, selected_projects=None, failed=None):
             total_images = mark[2]
             tasks.pop(project.name, None)
             failed[project.name] = str(exc)
-    files[DASHBOARD] = ("# All projects\n\n## Open tasks\n\n```tasks\npath includes " + TASK_DIR +
+    files[DASHBOARD] = ("# All projects\n\n"
+                        "> [!info]- Set up the task dashboard\n"
+                        "> Allow community plugins in Obsidian for this vault. If the queries below appear as code, "
+                        "check that [Tasks](https://community.obsidian.md/plugins/obsidian-tasks-plugin) is installed and enabled. "
+                        "You can also open the per-project checklists in the `_Folderwise Tasks` folder.\n\n"
+                        "## Open tasks\n\n```tasks\npath includes " + TASK_DIR +
                         "\nnot done\ngroup by filename\n```\n\n## Completed tasks\n\n```tasks\npath includes " + TASK_DIR +
                         "\ndone\ngroup by filename\n```\n").encode()
     return files, tasks, omissions
@@ -1644,6 +1666,52 @@ def seed_vaults(settings, home):
             save(home / 'vault-defaults.json', manifest)
 
 
+def plugin_paths(root, plugin_id):
+    return {name: safe(root, f'.obsidian/plugins/{plugin_id}/{name}') for name in PLUGIN_ASSETS}
+
+
+def enabled_plugins(root):
+    ids = read_json(safe(root, COMMUNITY_PLUGINS), [])
+    if not isinstance(ids, list) or any(not isinstance(item, str) for item in ids):
+        raise ValueError('Obsidian community-plugins.json must contain a list of plugin IDs')
+    return ids
+
+
+def install_plugins(root):
+    """Stage pinned releases in the dashboard vault, leaving app trust to Obsidian."""
+    ids = enabled_plugins(root)
+    pending = {}
+    for plugin_id, (label, repo, version, hashes) in PLUGIN_RELEASES.items():
+        paths = plugin_paths(root, plugin_id)
+        manifest = read_json(paths['manifest.json'], {})
+        if not isinstance(manifest, dict):
+            raise ValueError(f'{label}: invalid plugin manifest')
+        if manifest.get('id') == plugin_id and all(p.is_file() for p in paths.values()):
+            print(f"Preserved installed {label} {manifest.get('version', '')}".rstrip())
+            continue
+        for (name, target), expected in zip(paths.items(), hashes):
+            if target.exists():
+                if not target.is_file() or content_hash(target) != expected:
+                    raise ValueError(f'{label}: conflicting {name}; repair the plugin in Obsidian and retry')
+                continue
+            url = f'https://github.com/{repo}/releases/download/{version}/{name}'
+            try:
+                with urlopen(url, timeout=30) as response:
+                    data = response.read(4 * 1024 * 1024)
+            except OSError as exc:
+                raise ValueError(f'{label} {version}: could not download {name}; retry plugin setup ({exc})') from exc
+            if digest(data) != expected:
+                raise ValueError(f'{label} {version}: checksum mismatch for {name}')
+            pending[target] = data
+        print(f'Verified {label} {version}')
+    for target, data in pending.items():
+        atomic(target, data)
+    updated_ids = ids + [plugin_id for plugin_id in PLUGIN_RELEASES if plugin_id not in ids]
+    if updated_ids != ids:
+        save(safe(root, COMMUNITY_PLUGINS), updated_ids)
+    print('Tasks and Dataview are installed and selected for this vault. Allow community plugins in Obsidian when prompted.')
+
+
 def tasks_compatibility(settings, diagnose=False):
     """Read the phone vault's settings without changing user choices or installing plugins."""
     root = Path(settings['vault'])
@@ -1667,12 +1735,17 @@ def tasks_compatibility(settings, diagnose=False):
             statuses[entry['symbol']] = entry['type']
     if diagnose:
         manifest = read_json(safe(root, '.obsidian/plugins/obsidian-tasks-plugin/manifest.json'), {})
-        plugins = read_json(safe(root, '.obsidian/community-plugins.json'), [])
+        plugins = enabled_plugins(root)
         print('Tasks version: ' + str(manifest.get('version', 'not installed; install and enable Tasks on each device')))
         print('Compatibility fixtures: Tasks 8.6.0; verify other versions with the iPhone acceptance checklist')
         print('Task format: ' + data.get('taskFormat', 'tasksPluginEmoji') + '; automatic lifecycle dates supported')
-        if 'obsidian-tasks-plugin' not in plugins:
-            print('WARNING Tasks is not enabled in this vault; the generated Tasks dashboard requires it')
+        for plugin_id, (label, _, _, _) in PLUGIN_RELEASES.items():
+            if not all(p.is_file() for p in plugin_paths(root, plugin_id).values()):
+                print(f'{label} setup: plugin files missing; run vault-init --install-plugins')
+            elif plugin_id not in plugins:
+                print(f'{label} setup: installed; enable it in Obsidian')
+            else:
+                print(f'{label} setup: installed and selected; confirm community plugins are allowed in Obsidian')
         if data.get('globalFilter'):
             print('WARNING non-empty Tasks globalFilter may hide tasks; clear it to show the complete dashboard')
         if manifest.get('version') and manifest['version'] != '8.6.0':
@@ -1692,7 +1765,7 @@ def enroll_project(project, home):
             "Record the user-selected bridge setup. Task imports remain subject to project validation and hooks.\n\nBridge: folderwise-ibridge")
 
 
-def setup_bridge(settings, path, dry=False):
+def setup_bridge(settings, path, dry=False, with_plugins=False):
     source = Path(settings['source'])
     roots = projects(settings, include_disabled=True)
     enrollment = []
@@ -1711,7 +1784,9 @@ def setup_bridge(settings, path, dry=False):
     print(f"Initialize parent vault: {source}; iCloud vault: {settings['vault']}")
     print('New projects will default to folderwise-ibridgesync: true; --icloud-disabled opts out.')
     print('Enroll unconfigured projects: ' + (', '.join(p.name for p in enrollment) or 'none'))
-    print('Preserve explicit project opt-outs and existing Obsidian settings. Install Tasks/Dataview through Obsidian.')
+    if with_plugins:
+        releases = ' and '.join(f'{label} {version}' for label, _, version, _ in PLUGIN_RELEASES.values())
+        print(f'Install {releases} in the dashboard vault where missing, and select both for activation.')
     if dry:
         eligible = {p: cfg for p, cfg in roots.items() if p in enrollment or cfg.get('folderwise-ibridgesync', False)}
         files, _, omissions = inventory(settings, selected_projects=eligible)
@@ -1725,6 +1800,8 @@ def setup_bridge(settings, path, dry=False):
     save(path, dict(settings, enabled=False))
     save(marker, {'version': 1, 'enabled': False, 'bridge_config': str(path)})
     seed_vaults(settings, path.parent)
+    if with_plugins:
+        install_plugins(Path(settings['vault']))
     for project in enrollment:
         enroll_project(project, path.parent)
     settings['enabled'] = True
@@ -1735,7 +1812,10 @@ def setup_bridge(settings, path, dry=False):
         save(path, settings)
         return result
     save(marker, {'version': 1, 'enabled': True, 'bridge_config': str(path)})
-    print('Obsidian defaults installed. Community-plugin code and device workspace layouts were not copied.')
+    print(f"Open this folder as a vault in Obsidian: {settings['vault']}")
+    if not with_plugins:
+        print('Run vault-init --install-plugins or install Tasks and Dataview through Obsidian.')
+    print(f'Allow community plugins for this vault and open {DASHBOARD} in Reading view.')
     return 0
 
 
@@ -1790,6 +1870,8 @@ def main():
     ap.add_argument("--no-schedule", action="store_true", help="initialize and sync without registering a macOS job")
     ap.add_argument("--source", type=Path)
     ap.add_argument("--vault", type=Path)
+    ap.add_argument("--icloud", action="store_true", help="setup: use the standard Obsidian iCloud vault and install both plugins")
+    ap.add_argument("--install-plugins", action="store_true", help="setup or vault-init: install and select Tasks and Dataview in the dashboard vault")
     ap.add_argument("--mode", choices=["full", "lean"])
     ap.add_argument("--interval-minutes", type=int)
     ap.add_argument("--max-image-bytes", type=int)
@@ -1803,12 +1885,27 @@ def main():
     args = ap.parse_args()
     if args.setup_message and args.command != "notify-test":
         ap.error("--setup-message requires notify-test")
+    if args.icloud and args.command != "setup":
+        ap.error("--icloud requires setup")
+    if args.install_plugins and args.command not in {"setup", "vault-init"}:
+        ap.error("--install-plugins requires setup or vault-init")
+    if args.install_plugins and args.command == "vault-init" and args.dry_run:
+        ap.error("--dry-run for plugin setup requires setup")
     path = args.config.expanduser().absolute()
     try:
         with locked(path.parent):
             if args.command == "setup":
                 if path.exists() and config_load(path).get('enabled', True):
                     raise ValueError("config exists; use configure or vault-init")
+                if args.icloud:
+                    args.source = args.source or TOOLS.parent
+                    if args.vault is None:
+                        container = Path.home() / ICLOUD_OBSIDIAN
+                        if sys.platform != 'darwin' or not container.is_dir():
+                            raise ValueError('Obsidian iCloud folder unavailable; enable iCloud Drive and open Obsidian, or pass --vault')
+                        args.vault = container / 'Folderwise'
+                        if not path.exists() and args.vault.exists() and any(args.vault.iterdir()):
+                            raise ValueError(f'{args.vault} already contains files; pass --vault to select it explicitly')
                 if not args.source or not args.vault:
                     raise ValueError("setup requires --source and --vault")
                 settings = dict(version=1, source=str(args.source.expanduser().resolve()), vault=str(args.vault.expanduser().resolve()),
@@ -1840,7 +1937,7 @@ def main():
                 finally:
                     candidate.unlink(missing_ok=True)
                 if args.command == 'setup':
-                    result = setup_bridge(settings, path, args.dry_run)
+                    result = setup_bridge(settings, path, args.dry_run, args.icloud or args.install_plugins)
                     if result or args.dry_run or args.no_schedule:
                         return result
                 else:
@@ -1849,6 +1946,8 @@ def main():
                     return 0
             if args.command == 'vault-init':
                 seed_vaults(settings, path.parent)
+                if args.install_plugins:
+                    install_plugins(Path(settings['vault']))
                 return 0
             if args.command == 'uninstall':
                 uninstall_bridge(settings, path)

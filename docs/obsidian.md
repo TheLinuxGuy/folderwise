@@ -13,19 +13,18 @@ Goal: tick a task in Obsidian on your iPhone and watch it become a local, review
 * A Mac that stays logged in: the scheduled job is a macOS LaunchAgent. Linux can run foreground-only with `--no-schedule`; Windows and Android are unsupported.
 * Python 3.10+, [uv](https://docs.astral.sh/uv/getting-started/installation/) and Git with a configured author identity.
 * A Folderwise checkout (see [Getting started](../README.md#-getting-started)) with at least one project whose files are committed; only tracked files are exported.
-* An iPhone and the Mac on the same Apple account with iCloud Drive on, and the Obsidian app on the iPhone (validated: Obsidian 1.14.5, iOS 27.0.1).
-* The community **Tasks** plugin in Obsidian (validated: 8.6.0), installed from Obsidian's own plugin browser; it is not bundled. Dataview is optional.
+* A Mac and iPhone on the same Apple account with iCloud Drive on. Install Obsidian 1.13.1 or later and open it once. In iCloud Drive, look for the Obsidian folder with the app icon. If it is missing, follow [Obsidian's iCloud setup](https://obsidian.md/help/sync-notes#iCloud).
+* Internet access for the first setup. Folderwise downloads **Tasks 8.6.0** and **Dataview 0.5.68** from their official releases.
 
 ### 1. Installation / Setup
 
 ```sh
 cd ~/folderwise                         # your Folderwise checkout
-VAULT="$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Folderwise"
-uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$VAULT" --dry-run   # preview; changes nothing
-uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$VAULT"             # export, enroll projects, first sync, register schedule
+uv run _tools/icloud_bridge.py setup --icloud --dry-run
+uv run _tools/icloud_bridge.py setup --icloud
 ```
 
-Setup enrolls every existing project that has no explicit setting (commit pending edits in them first) and makes future `new_project.py` projects join by default. See [Explicit setup](#explicit-setup-and-reusable-vault-defaults) for what it writes and [Uninstall](#uninstall-or-remove-the-supplied-defaults) to undo it.
+Setup enrolls existing projects without an explicit setting (commit pending edits first) and makes future `new_project.py` projects join by default. It prints the vault path. In Obsidian on the Mac, choose **Open folder as vault**, select the printed folder, and allow community plugins when prompted. Under **Settings → Community plugins**, check that **Tasks** and **Dataview** are both enabled. Open `Tasks.md` in Reading view.
 
 Before relying on scheduled imports, complete [Keep Downloaded](#required-keep-the-entire-vault-downloaded-on-the-mac) for the newly created vault. Setup does not enable or verify this Finder setting.
 
@@ -38,7 +37,7 @@ uv run _tools/icloud_bridge.py plan      # optional: read-only preview of any pe
 git -C ~/folderwise/my-project log -3 --format='%h %s'   # one of your projects
 ```
 
-* **On the iPhone:** open the iCloud vault `Folderwise` in Obsidian, turn off Restricted mode, enable **Tasks**, open `Tasks.md` in reading mode and tick one open task.
+* **On the iPhone:** after iCloud delivers the vault, open `Folderwise` in Obsidian and allow community plugins if prompted. Check that Tasks and Dataview are enabled. If either is missing after sync, install it from the [Obsidian plugin browser](https://obsidian.md/help/community-plugins). Open `Tasks.md` in Reading view and tick one open task.
 * **Wait** for iCloud delivery and the next scheduled run (up to the interval plus delivery time). Do not run `sync` by hand.
 * **Confirm the commit:** the project's `git log` shows `Update task completion from Obsidian` with the trailers `Bridge: folderwise-ibridge` and `Bridge-Ops: toggle=1 rename=0`. The task is now checked in the source note, and `_folderwise-sync-status.md` in the vault lists the commit under **Recent imports**. Nothing is pushed.
 
@@ -100,8 +99,8 @@ Obsidian is **off by default**. A fresh clone does not create `.obsidian/`, star
 Preview the complete setup, then run it (replace these fictional paths as needed):
 
 ```sh
-uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Folderwise" --dry-run
-uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Folderwise"
+uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Folderwise" --install-plugins --dry-run
+uv run _tools/icloud_bridge.py setup --source ~/folderwise --vault "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Folderwise" --install-plugins
 ```
 
 Setup creates the local parent vault alongside your project folders and a separate iCloud vault, installs missing settings, enrolls existing unconfigured projects, records the default for future projects, runs the initial sync, and registers the macOS schedule. `--no-schedule` performs setup and foreground sync without registering a job; use it on non-Mac systems and in test sandboxes. The setup notification announces the configured interval after the job is registered. `setup --dry-run` previews eligible files, estimated bytes, omissions and project enrollment without changing vaults, project flags or future-project defaults.
@@ -117,9 +116,11 @@ The framework ships reviewed defaults in `_tools/obsidian_defaults/`, not a live
 | `types.json` | Shared document property types, without demo query fields |
 | `community-plugins.json` and plugin settings | Tasks/Dataview IDs; automatic task dates and Dataview JavaScript disabled |
 
-**Community-plugin binaries are not bundled or downloaded.** Install Tasks and optional Dataview through Obsidian's community-plugin browser, then enable them. Setup seeds their settings; it does not bypass Obsidian's Restricted mode. See [Obsidian's community-plugin guide](https://help.obsidian.md/community-plugins). Device-specific `workspace.json`, caches and installed plugin code are never copied from the demo.
+`setup --icloud` defaults to the checkout containing the script and `iCloud Drive/Obsidian/Folderwise` on macOS. Use `--source` or `--vault` to override the paths. To reuse a nonempty vault, close it in Obsidian and pass `--vault` explicitly. If the Obsidian iCloud folder is unavailable, verify that iCloud Drive is on and that Obsidian can see its iCloud folder. For a separate local dashboard, use explicit paths and `--no-schedule`, then run `sync` as needed.
 
-Existing setting files are preserved in full. If you already have Tasks settings, confirm automatic dates are off; setup does not replace your preferences. `vault-init` fills missing defaults later without overwriting customization. Vaults become available when opened in Obsidian; the helper does not edit Obsidian's global vault registry.
+`setup --icloud` and `setup --install-plugins` verify SHA-256 checksums for the official Tasks and Dataview release files, stage them in the dashboard vault, and add both IDs to its enabled plugin list. Existing complete installations and other plugin selections are preserved. To install or repair the plugins for an existing bridge, close that vault in Obsidian and run `uv run _tools/icloud_bridge.py vault-init --install-plugins`. Obsidian controls Restricted mode and asks for your approval to run community plugins. Standard setup with explicit paths and no plugin flag uses the settings alone and can run offline. [Tasks 8.6.0](https://github.com/obsidian-tasks-group/obsidian-tasks/releases/tag/8.6.0) · [Dataview 0.5.68](https://github.com/blacksmithgu/obsidian-dataview/releases/tag/0.5.68) · [Obsidian plugin security](https://obsidian.md/help/plugin-security)
+
+Setup and `vault-init` fill missing settings and preserve custom preferences. If you already have Tasks settings, confirm automatic dates are off when using boolean-only adapters. `doctor` reports plugin files and vault selections from disk. Check actual activation in Obsidian on each device.
 
 Configuration, ownership records, baselines, temporary clones, export journal and logs stay outside iCloud. On Mac the default state directory is `~/Library/Application Support/Folderwise/ibridge/`. A private `.folderwise-obsidian.json` at the source root records whether the integration is enabled and points to that configuration. `new_project.py` reads it in each new process. Neither file is committed to the framework. Use `--config /absolute/path/config.json` before a bridge command for another private installation. Keep recovery state: deleting it removes knowledge of pending edits and owned files. Source, vault and state directories must remain separate.
 
@@ -127,7 +128,7 @@ Configuration, ownership records, baselines, temporary clones, export journal an
 
 ## Central task dashboard
 
-In Obsidian on Mac and iPhone, install and enable the community **Tasks** plugin (`obsidian-tasks-plugin`). Open the exported root `Tasks.md` in reading mode. It includes open and completed tasks across all enabled projects, grouped by project. Every result links to its source document. Undated and nested tasks are included; no tag is required. Tasks inside fenced code examples, front matter and generated blocks are excluded from generic Markdown scanning.
+With **Tasks** enabled in Obsidian, open the exported root `Tasks.md` in Reading view. It includes open and completed tasks across all enabled projects, grouped by project. Every result links to its source document. Undated and nested tasks are included and need no tag. Tasks inside fenced code examples, front matter and generated blocks are excluded from generic Markdown scanning.
 
 ### Complete and reopen from iPhone
 

@@ -3302,6 +3302,128 @@ def s_ibridge_setup():
     check('new_project rejects invalid persistent profiles before creating files',rc==2 and not (source/'bad-profile').exists(),out)
     profile.unlink()
 
+    # Run the real CLI with deterministic release responses in place of the network.
+    plugin_cli = root / 'plugin-cli.py'
+    plugin_cli.write_text('''# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pyyaml", "tzdata"]
+# ///
+import io
+import json
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent / "source/_tools"))
+import icloud_bridge as bridge
+
+assets = {}
+for plugin_id, (name, repo, version, _) in bridge.PLUGIN_RELEASES.items():
+    release = {
+        "main.js": f"/* fictional {name} */".encode(),
+        "styles.css": f"/* fictional {name} CSS */".encode(),
+        "manifest.json": json.dumps({"id": plugin_id, "version": version}).encode(),
+    }
+    bridge.PLUGIN_RELEASES[plugin_id] = (
+        name, repo, version, tuple(bridge.digest(release[asset]) for asset in bridge.PLUGIN_ASSETS),
+    )
+    assets.update({f"https://github.com/{repo}/releases/download/{version}/{asset}": data
+                   for asset, data in release.items()})
+
+def fetch(url, *, timeout):
+    with (Path(__file__).parent / "downloads").open("a") as log:
+        print(url, file=log)
+    mode = os.environ.get("FOLDERWISE_TEST_PLUGIN_RESPONSE")
+    if mode == "offline":
+        raise OSError("fictional network outage")
+    if mode == "corrupt" and "obsidian-dataview" in url:
+        return io.BytesIO(b"unexpected response")
+    return io.BytesIO(assets[url])
+
+bridge.urlopen = fetch
+sys.exit(bridge.main())
+''')
+
+    def plugin_run(*args, response='ok'):
+        return sh(['uv', 'run', '--quiet', str(plugin_cli), '--config', str(config), *map(str, args)],
+                  cwd=source, env=dict(env, FOLDERWISE_TEST_PLUGIN_RESPONSE=response))
+
+    quickstart = ['setup', '--icloud', '--vault', vault, '--no-schedule']
+    downloads = root / 'downloads'
+    plugin_dir = vault / '.obsidian/plugins'
+    installed = [plugin_dir / plugin / 'main.js' for plugin in ('obsidian-tasks-plugin', 'dataview')]
+    rc, out = plugin_run(*quickstart, '--dry-run')
+    check('iCloud quickstart infers its checkout and previews both releases without downloads', rc == 0
+          and 'Tasks 8.6.0 and Dataview 0.5.68' in out and not downloads.exists(), out)
+    rc, out = plugin_run(*quickstart, response='offline')
+    check('quickstart reports download failure and stays disabled', rc == 1
+          and 'could not download main.js' in out and not json.loads(config.read_text())['enabled'], out)
+    rc, out = plugin_run(*quickstart, response='corrupt')
+    check('a bad checksum for either plugin prevents staging both', rc == 1
+          and 'Dataview 0.5.68: checksum mismatch' in out and not any(p.exists() for p in installed), out)
+    rc, out = plugin_run(*quickstart)
+    check('quickstart stages both plugins and opens a path to the dashboard', rc == 0
+          and all(p.is_file() and p.with_name('manifest.json').is_file() and p.with_name('styles.css').is_file()
+                  for p in installed) and str(vault) in out and 'Allow community plugins' in out
+          and 'Set up the task dashboard' in (vault/'Tasks.md').read_text(), out)
+    check('quickstart stages plugin code only in the dashboard vault',
+          not (source/'.obsidian/plugins/obsidian-tasks-plugin/main.js').exists())
+    enabled = vault / '.obsidian/community-plugins.json'
+    check('quickstart selects both newly installed plugins',
+          set(json.loads(enabled.read_text())) == {'obsidian-tasks-plugin', 'dataview'})
+    dataview_css = installed[1].with_name('styles.css')
+    dataview_css.unlink()
+    rc, out = plugin_run('vault-init', '--install-plugins')
+    check('plugin repair fills missing release files alongside verified existing ones',
+          rc == 0 and dataview_css.is_file(), out)
+    enabled.write_text('["user-plugin", "dataview"]')
+    rc, out = invoke('doctor')
+    check('doctor distinguishes installed and selected plugins', rc == 0 and 'Tasks setup: installed; enable' in out
+          and 'Dataview setup: installed and selected' in out, out)
+    installed[0].write_text('/* existing installation */')
+    before_downloads = downloads.read_text()
+    rc, out = plugin_run('vault-init', '--install-plugins', response='offline')
+    check('plugin repair preserves existing code and adds only missing IDs without redownloading', rc == 0
+          and json.loads(enabled.read_text()) == ['user-plugin', 'dataview', 'obsidian-tasks-plugin']
+          and installed[0].read_text() == '/* existing installation */' and downloads.read_text() == before_downloads, out)
+    installed[0].with_name('styles.css').unlink()
+    rc, out = plugin_run('vault-init', '--install-plugins')
+    check('plugin repair refuses to mix pinned and locally modified assets', rc == 1 and 'conflicting main.js' in out, out)
+    installed[1].with_name('manifest.json').unlink()
+    rc, out = invoke('doctor')
+    check('doctor flags incomplete files despite a selected plugin ID', rc == 0 and 'Dataview setup: plugin files missing' in out, out)
+    installed[0].with_name('manifest.json').write_text('[]')
+    rc, out = plugin_run('vault-init', '--install-plugins')
+    check('plugin repair rejects malformed existing manifests', rc == 1 and 'invalid plugin manifest' in out, out)
+    enabled.write_text('[42]')
+    rc, out = plugin_run('vault-init', '--install-plugins')
+    check('plugin repair preserves a malformed enable list for review',
+          rc == 1 and 'must contain a list of plugin IDs' in out and enabled.read_text() == '[42]', out)
+    for flags, message in [
+        (('doctor', '--icloud'), '--icloud requires setup'),
+        (('doctor', '--install-plugins'), '--install-plugins requires setup or vault-init'),
+        (('vault-init', '--install-plugins', '--dry-run'), '--dry-run for plugin setup requires setup'),
+    ]:
+        rc, out = invoke(*flags)
+        check(f'invalid plugin setup options fail before modifying the vault: {flags}', rc == 2 and message in out, out)
+    rc, out = invoke('uninstall')
+    check('uninstall preserves installed community plugin code', rc == 0 and all(p.is_file() for p in installed), out)
+
+    if sys.platform == 'darwin':
+        default_vault = root/'fake-home/Library/Mobile Documents/iCloud~md~obsidian/Documents/Folderwise'
+        default_config = home/'default-preview.json'
+        rc, out = local('icloud_bridge.py', '--config', default_config, 'setup', '--icloud', '--dry-run')
+        check('quickstart reports an unavailable Obsidian iCloud folder', rc == 1 and 'folder unavailable' in out, out)
+        default_vault.parent.mkdir(parents=True)
+        rc, out = local('icloud_bridge.py', '--config', default_config, 'setup', '--icloud', '--dry-run')
+        check('quickstart chooses the standard Mac vault without creating it during preview', rc == 0
+              and str(default_vault) in out and not default_vault.exists(), out)
+        default_vault.mkdir()
+        (default_vault/'Existing.md').write_text('Existing vault')
+        rc, out = local('icloud_bridge.py', '--config', default_config, 'setup', '--icloud', '--dry-run')
+        check('quickstart requires explicit selection of an existing nonempty default vault',
+              rc == 1 and 'pass --vault to select it explicitly' in out, out)
+
 
 SECTIONS = [
     ("create", s_create), ("new_doc", s_new_doc_and_index), ("create_version", s_create_version), ("stamp", s_stamp_and_hook), ("hook", s_hook_fail_closed),
