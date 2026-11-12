@@ -44,6 +44,32 @@ Provenance: all content is fictional acceptance-test data from the 0.2.0 real-iP
 
 The ledger and saved copies are aged into the 30-day retention window when loaded, because the bridge forgets older ones. To keep the rebuilt source, state and vault for manual inspection, run `uv run _tools/selftest.py -k ibridge_fixture --keep`.
 
+#### Using the fixture (for AI agents and humans)
+
+Use it when a change touches the status note, the recovery callout, rejection history, retention, or how a rejected phone edit is saved and restored. It replaces recreating a stuck vault by hand and needs no phone, iCloud or LaunchAgent.
+
+1. **Run the check:** `uv run _tools/selftest.py -k ibridge_fixture`. It rebuilds everything in a temporary folder, runs the real bridge and deletes the folder. It must pass before and after your change.
+2. **Inspect or screenshot the result:** add `--keep`. The last line, `kept: <tmp>`, names a folder with `fixture-sandbox/source` (a throwaway git project plus a copy of the tools), `fixture-sandbox/vault` (plain Markdown, including the generated `_folderwise-sync-status.md`), `fixture-sandbox/state` (the bridge home: `config.json`, `ledger.json`, `rejected/`) and `fixture-sandbox/fakebin` (stand-ins for `open`, `codesign`, `launchctl` and `osacompile`).
+3. **Run the bridge by hand against the kept folder** with the stand-ins first on `PATH`, so nothing opens a real notification or touches launchd:
+
+   ```sh
+   cd <tmp>/fixture-sandbox
+   PATH="$PWD/fakebin:$PATH" uv run --quiet source/_tools/icloud_bridge.py --config state/config.json status
+   PATH="$PWD/fakebin:$PATH" uv run --quiet source/_tools/icloud_bridge.py --config state/config.json sync
+   ```
+
+   The kept state is the state after the test's replay: the phone re-saved the newest rejected text, so the ledger holds the latest ten rejections, the oldest has left the report, and its saved copy is still in `state/rejected/`. Open `fixture-sandbox/vault` in desktop Obsidian as a folder to see how the note renders. Delete the kept folder when you are done.
+4. **Re-run from the pristine state** by running the self-test again; never repair a kept folder by hand and treat it as the fixture.
+
+Rules:
+
+- **Never** point the fixture's `config.json` at a real vault, run `setup` or a schedule against it, or copy the kept vault into iCloud. It is test data, not a template for a user's vault.
+- **Change the fixture only by adding or editing plain files** under `_tools/fixtures/stuck_edit_vault/`. Do not store a `.git` folder, `.DS_Store`, `.obsidian`, the generated status note, caches, local paths or real project text; the first checks in `ibridge_fixture` fail if any appear. Keep `<SOURCE>` and `<VAULT>` placeholders in `config.json`.
+- **Do not make a failing assertion pass by editing the fixture** unless the behavior change is intended. If it is, explain it in the PR and update the provenance paragraph above.
+- **Keep assertions layout-agnostic** (the status note's layout changes); assert on reasons, counts and recovery pointers rather than on exact line order.
+- **Dates are aged on load.** The test shifts ledger times and saved-copy times into the 30-day retention window, so the fixture keeps working however old it gets. Do not "refresh" the stored dates.
+- A new fixture needs its own self-test section, an entry in the section table above and a traceability row, as for any new test.
+
 ## Real-iPhone acceptance checklist
 
 ### Ground rules
