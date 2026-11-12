@@ -25,17 +25,16 @@ You solved it once. Keep the instructions, the evidence, and the decisions somew
 
 ## 🆕 What's new
 
-**Folderwise 0.2.0: your knowledge folders, in your pocket.** An optional, opt-in **Obsidian + iCloud bridge** lets you read your projects and tick off tasks on an iPhone, while your Mac stays the owner of every repository. See the [Releases page](https://github.com/TheLinuxGuy/folderwise/releases) for the full list of changes.
+**Folderwise 0.3.0: easier iPhone setup and a clearer sync status.** The optional **Obsidian + iCloud bridge** is quicker to set up, and its status note now shows at a glance whether your Mac is in sync. See the [0.3.0 release notes](https://github.com/TheLinuxGuy/folderwise/releases/tag/v0.3.0) for the full list of changes.
 
-- 📱 **iPhone bridge.** A scheduled macOS LaunchAgent links your Mac-owned Git projects to an Obsidian vault through iCloud. The phone never pushes; checkbox toggles come back as local commits with provenance. **[Quick Start →](docs/obsidian.md#quick-start)**
-- ✅ **Real Obsidian Tasks 8.x support,** in emoji and Dataview formats: dates, priorities, in-progress, cancelled and custom statuses, automatic lifecycle dates, recurrence, on-completion delete, IDs and dependencies, nested and quoted subtasks.
-- 🛡️ **Safe by design.** Opt-in renames and copied-note edits, CSV task adapters with capability checks, a 120-second quiet period, contained and recoverable rejected edits, per-project pausing, and a status report. Mac and phone conflicts never silently overwrite.
-- 🧪 **Validated on a real iPhone.** 88 acceptance checks through the real scheduled job: 85 pass, 3 are blocked by physical limits, none failed. [Results and how to reproduce them →](docs/ibridge-acceptance-0.2.0.md)
-- 📦 **Minimal pull-only checkouts** for the framework beside your own repositories.
+- 🚀 **One-command vault setup.** `setup --icloud` creates the iCloud vault and downloads the official Tasks 8.6.0 and Dataview 0.5.68 releases, verifying their checksums. Open the vault in Obsidian and allow community plugins. **[Quick Start →](docs/obsidian.md#quick-start)**
+- 🩺 **A sync status you can read on your phone.** The note opens with a green or amber callout and the time of the last Mac sync. If a phone edit couldn't be applied, an amber callout explains how to recover it, the latest rejection is shown, and older ones are one tap away. Sizes and limits sit in a collapsed **Export details**. [Bridge status report →](docs/obsidian.md#bridge-status-report)
+- 📌 **Keep Downloaded is now a documented setup step** for the syncing Mac. [Why and how →](docs/obsidian.md#required-keep-the-entire-vault-downloaded-on-the-mac)
+- 🧾 **Projects remember where they came from.** The first commit of a new project records the Folderwise version that created it.
 
-Not validated: offline-then-reconnect edits, a fresh vault's Tasks plugin load on the phone, and a visible notification banner. The bridge needs macOS; Android and native Windows are unsupported.
+Not yet verified on a real device: plugin delivery and first activation in a fresh iPhone vault. The bridge needs macOS; Android and native Windows are unsupported.
 
-**Earlier:** [Folderwise 0.1.0](https://github.com/TheLinuxGuy/folderwise/releases/tag/v0.1.0), the first release: downloadable archives with checksums, CI on every change, a guarded framework repository and safe archive upgrades ([upgrading an archive install](docs/framework-checkout.md#upgrading-an-archive-install)).
+**Earlier:** [Folderwise 0.2.0](https://github.com/TheLinuxGuy/folderwise/releases/tag/v0.2.0) introduced the iPhone bridge: real Obsidian Tasks support, opt-in renames and copied-note edits, CSV task adapters and contained, recoverable rejected edits, validated on a real iPhone ([88 checks, 85 pass, 3 blocked by physical limits](docs/ibridge-acceptance-0.2.0.md)). [Folderwise 0.1.0](https://github.com/TheLinuxGuy/folderwise/releases/tag/v0.1.0) was the first release: downloadable archives with checksums, CI on every change, a guarded framework repository and safe archive upgrades ([upgrading an archive install](docs/framework-checkout.md#upgrading-an-archive-install)).
 
 ## 🚀 Getting started
 
@@ -115,7 +114,7 @@ Every tool, flag and setting is documented in the [full guide](docs/guide.md).
   <img src="docs/assets/ibridge-iphone-sync-status.png" alt="Obsidian on iPhone showing the last Mac sync, phone edit recovery, rejection history, and collapsed Export details above Issues" width="360">
 </p>
 
-The [sync status note](docs/obsidian.md#bridge-status-report) shows when the Mac last ran and whether that run reported issues. Earlier rejected edits appear separately.
+The [sync status note](docs/obsidian.md#bridge-status-report) shows when the Mac last ran and whether that run reported issues. If a phone edit was rejected, it explains how to recover it from the saved copy on your Mac.
 
 **New to the bridge?** The [Quick Start](docs/obsidian.md#quick-start) creates the iCloud vault with Tasks and Dataview ready to enable in Obsidian.
 
