@@ -27,6 +27,7 @@ import sys
 import tempfile
 import time
 import unicodedata
+from datetime import date, datetime
 from contextlib import contextmanager, suppress
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote, urlsplit
@@ -1233,32 +1234,59 @@ def display_size(size):
     return exact
 
 
+def status_date(value):
+    return f"{value:%b} {value.day}"
+
+
 def report(files, omissions, issues, settings, managed_bytes, updated_at, ledger=None, copies=(), paused=(), waiting=()):
     image_bytes = sum(content_size(data) for key, data in files.items() if Path(key).suffix.lower() in IMAGES)
     callout = "> [!warning] Last Mac sync completed with issues" if issues else "> [!success] Last Mac sync completed"
     result = "> See **Issues** below." if issues else "> No issues reported in this run."
     minutes = settings['interval_minutes']
-    rows = ["# Folderwise sync status", "", callout, f"> **{updated_at:%Y-%m-%d %H:%M:%S %Z}**", result]
+    rows = ["# Folderwise sync status", "", callout, f"> {status_date(updated_at)}, {updated_at:%H:%M %Z}", result]
     ledger = ledger or {}
     rejected = ledger.get("rejected", [])
     if rejected:
         count = len(rejected)
-        dates = sorted({entry["at"].split()[0] for entry in rejected})
-        period = dates[0] if len(dates) == 1 else f"{dates[0]} to {dates[-1]}"
+        dates = sorted({date.fromisoformat(entry["at"].split()[0]) for entry in rejected})
+        first, last = dates[0], dates[-1]
+        period = status_date(first)
+        if first.year != last.year:
+            period = f"{period}, {first.year}–{status_date(last)}, {last.year}"
+        elif first.month != last.month:
+            period += f"–{status_date(last)}"
+        elif first != last:
+            period += f"–{last.day}"
         rows += ["", "> [!warning] Phone edits not applied",
                  f"> **{count} past {'rejection' if count == 1 else 'rejections'} · {period}**", ">",
                  f"> Folderwise restored the affected task views and saves rejected text on your Mac for {KEEP_DAYS} days.", ">",
                  "> **To recover an edit**, open the bridge’s `rejected/` folder on your Mac. "
                  "Review the saved copy and apply the intended change in the source project.", ">",
                  "> [See recovery steps](https://github.com/TheLinuxGuy/folderwise/blob/main/docs/obsidian.md#conflicts-and-recovery)"]
-    rows += ["", f"**Configured interval:** Every {minutes} {'minute' if minutes == 1 else 'minutes'}.", "",
-            "If this time stops advancing, check the bridge on your Mac. iCloud delivery can lag.", "", "## Issues", ""]
+        latest = rejected[-1]
+        at = datetime.strptime(latest["at"], "%Y-%m-%d %H:%M UTC")
+        path = PurePosixPath(latest["file"])
+        label = path.stem.replace("-", " ").capitalize() if path.parent == PurePosixPath(TASK_DIR) else latest["file"]
+        rows += ["", "## Rejection history", "",
+                 f"**{cell(label)}** · {status_date(at)}, {at:%H:%M} UTC  ",
+                 cell(latest["reason"])]
+    rows += ["", "> [!info]- Export details",
+             f"> - **Configured interval:** Every {minutes} {'minute' if minutes == 1 else 'minutes'}.",
+             f"> - **Mode:** {settings['mode'].capitalize()}",
+             f"> - **Estimated managed export:** {display_size(sum(content_size(data) for data in files.values()))}",
+             f"> - **Images included:** {display_size(image_bytes)}",
+             f"> - **Current managed payload:** {display_size(managed_bytes)} (excludes status, settings and unowned files)",
+             f"> - **Image limit per file:** {display_size(settings['max_image_bytes'])}",
+             f"> - **Total image limit:** {display_size(settings['max_images_total_bytes'])}",
+             ">", "> These figures describe the vault files. For iCloud account usage, check iCloud settings.",
+             ">", "> If the sync time stops advancing, check the bridge on your Mac. iCloud delivery can lag."]
+    rows += ["", "## Issues", ""]
     rows += ["- " + str(x).replace("\n", " ") for x in issues] or ["None."]
     if paused:
         rows += ["", "Paused projects: " + ", ".join(cell(p) for p in paused) + ". Their imports and exports wait until the issue is fixed; other projects keep syncing."]
-    if rejected:
-        rows += ["", "## Rejection history", ""]
-        rows += [f"- **{cell(e['file'])}** · {e['at']}\n  {cell(e['reason'])}" for e in rejected]
+    if len(rejected) > 1:
+        rows += ["", "## Earlier rejections", "", "> [!info]- Show earlier entries", ">"]
+        rows += [f"> - **{cell(e['file'])}** · {e['at']}  \n>   {cell(e['reason'])}" for e in reversed(rejected[:-1])]
     if waiting:
         rows += ["", "## Phone edits waiting", "", "These notes are imported once their text has stayed unchanged for the quiet period.", ""]
         rows += [f"- {cell(w)}" for w in waiting]
@@ -1268,15 +1296,7 @@ def report(files, omissions, issues, settings, managed_bytes, updated_at, ledger
     if copies:
         rows += ["", "## iCloud conflict copies", "", "These files were not imported. Compare each with its original and delete the one you do not want.", ""]
         rows += [f"- {cell(c)}" for c in copies]
-    rows += ["", "> [!info]- Export details",
-             f"> - **Mode:** {settings['mode'].capitalize()}",
-             f"> - **Estimated managed export:** {display_size(sum(content_size(data) for data in files.values()))}",
-             f"> - **Images included:** {display_size(image_bytes)}",
-             f"> - **Current managed payload:** {display_size(managed_bytes)} (excludes status, settings and unowned files)",
-             f"> - **Image limit per file:** {display_size(settings['max_image_bytes'])}",
-             f"> - **Total image limit:** {display_size(settings['max_images_total_bytes'])}",
-             ">", "> These figures describe the vault files. For iCloud account usage, check iCloud settings.",
-             "", "## Omitted files", "", "| Path | Size | Reason |", "| --- | ---: | --- |"]
+    rows += ["", "## Omitted files", "", "| Path | Size | Reason |", "| --- | ---: | --- |"]
     rows += [f"| {cell(x['path'])} | {display_size(x['bytes'])} | {x['reason']} |" for x in omissions]
     return ("\n".join(rows) + "\n").encode()
 
