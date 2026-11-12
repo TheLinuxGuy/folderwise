@@ -17,13 +17,13 @@
 
 You solved it once. Keep the instructions, the evidence, and the decisions somewhere you can find them again.
 
-**Folderwise** is a Markdown-and-Git framework for knowledge that humans read and AI agents help maintain. Each topic (your home network, household records, a technical runbook) gets its own folder and Git history, shared rules for agents, and checks that keep every note dated, attributed and correctly linked. Optionally, read it and tick off tasks from your iPhone.
+**Folderwise** is a Markdown-and-Git framework for knowledge that humans read and AI agents help maintain. Each topic (your personal finances, a home network, cooking recipes, college notes, a technical runbook) gets its own folder and Git history, shared rules for agents, and checks that keep every note dated, attributed and correctly linked. Optionally, read it and tick off tasks from your iPhone.
 
 It is a set of Python scripts and conventions that run on your machine: not an app, a hosted service or an AI model. You, Codex or Claude Code write the notes; Folderwise keeps them consistent and reviewable.
 
 | If you are... | Start here |
 |---|---|
-| 🏠 organizing what you know about a home, household or system | [Getting started](#-getting-started) |
+| 🗂️ organizing what you know about your personal finances, a system, cooking recipes or college notes | [Getting started](#-getting-started) |
 | 🤖 using Claude Code or Codex to write and maintain the docs | [What you get](#-what-you-get) |
 | 📱 an Obsidian user who wants your projects on an iPhone | [Your projects on iPhone](#-your-projects-on-iphone) |
 
