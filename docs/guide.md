@@ -326,7 +326,7 @@ uv uses its platform-default cache location. The committed `uv.toml` contains no
 | `render_tables.py` | render CSV-backed tables into docs | project |
 | `docs_doctor.py` | health check of a project's setup (hook, sync, config, git, lint, staleness) | project / `--all` |
 | `sync_rules.py` | push the template's rules, hook and config files into projects | root |
-| `selftest.py` | verify the tools themselves | root |
+| `selftest.py` | verify the tools themselves (`-k ibridge_fixture --keep` also leaves a rebuilt stuck-phone-edit test vault for manual inspection; see [bridge testing](ibridge-testing.md#stuck-edit-fixture)) | root |
 | `framework_guard.py` | prevent knowledge folders, secrets, symlinks, or nested repositories from entering the framework index | root |
 
 Every agent rule lives in each project's `AGENTS.md` (shared block from `_template/AGENTS.md`); this README is the human guide. See the root `AGENTS.md` for the layout and the rules for changing the tools.
