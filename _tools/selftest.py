@@ -3221,6 +3221,106 @@ elif op=='validate':
     rc, out = invoke('doctor')
     check('doctor diagnoses automatic dates unsupported by an adapter', rc == 1 and 'adapter lacks cancelled capability' in out, out)
 
+def s_ibridge_fixture():
+    """The stuck-phone-edits fixture (_tools/fixtures/stuck_edit_vault): a real test vault whose iPhone edits were rejected ten
+    times. Plain files are rebuilt into a source project, a bridge state and a vault in a temp folder (never a stored repository),
+    then the real bridge runs over them. Keep the folder with `selftest.py -k ibridge_fixture --keep` for screenshots or manual runs."""
+    fixture = CTX['tools'] / 'fixtures' / 'stuck_edit_vault'
+    root = CTX['root'] / 'fixture-sandbox'
+    source, vault, home = root / 'source', root / 'vault', root / 'state'
+    conf, status_file = home / 'config.json', vault / '_folderwise-sync-status.md'
+    check('the fixture ships plain files only', fixture.is_dir() and not any(
+        p.name in ('.git', '.DS_Store', '.obsidian', '.docs.yaml') or p.is_symlink() for p in fixture.rglob('*')))
+    stored = json.loads((fixture / 'ledger.json').read_text())
+    check('the fixture ledger holds ten rejections and ten imports', len(stored['rejected']) == 10 and len(stored['imports']) == 10)
+    check('every stored rejection has its saved phone text', len(list((fixture / 'rejected').glob('*/*.md'))) == 10)
+    leaks = [p for p in fixture.rglob('*') if p.is_file() and ('/Users/' in p.read_text(errors='replace') or '/home/' in p.read_text(errors='replace'))]
+    check('the fixture names no private absolute path', not leaks, str(leaks))
+
+    # --- rebuild the source project from plain files -------------------------------------------------------------
+    source.mkdir(parents=True)
+    for name in ('_tools', '_template'):
+        shutil.copytree(CTX['root'] / name, source / name, ignore=shutil.ignore_patterns('__pycache__'))
+    project = source / 'lab-notes'
+    shutil.copytree(fixture / 'source' / 'lab-notes', project)
+    (project / 'docs.yaml').rename(project / '.docs.yaml')
+    (project / 'attachments').mkdir()
+    (project / 'attachments' / 'not-synced.bin').write_bytes(bytes(1048576))  # the stored fixture omits the 1 MiB filler
+    (project / '.gitignore').write_text('.DS_Store\n')
+    for cmd in (['git', 'init', '-q'], ['git', 'add', '-A'], ['git', 'commit', '-qm', 'Fictional lab-notes fixture']):
+        rc, out = sh(cmd, cwd=project)
+        check('fixture source project ' + cmd[1], rc == 0, out)
+
+    fake = root / 'fakebin'
+    fake.mkdir()
+    for executable in ('open', 'codesign', 'launchctl'):
+        (fake / executable).write_text('#!/bin/sh\nexit 0\n')
+        (fake / executable).chmod(0o755)
+    (fake / 'osacompile').write_text('#!' + sys.executable + '\nimport pathlib,plistlib,sys\np=pathlib.Path(sys.argv[2])/"Contents"\n(p/"Resources").mkdir(parents=True)\n(p/"Info.plist").write_bytes(plistlib.dumps({"CFBundleName":"applet"}))\n(p/"Resources/main.scpt").write_bytes(pathlib.Path(sys.argv[3]).read_bytes())\n')
+    (fake / 'osacompile').chmod(0o755)
+    env = {'PATH': str(fake) + os.pathsep + os.environ['PATH']}
+
+    def invoke(*args):
+        return tool('icloud_bridge.py', '--config', conf, *args, env=env)
+
+    rc, out = invoke('setup', '--source', source, '--vault', vault, '--notifications', 'errors', '--no-schedule')
+    check('fixture setup succeeds', rc == 0 and 'Open this folder as a vault' in out, out)
+    settings = json.loads((fixture / 'config.json').read_text())
+    config = json.loads(conf.read_text())
+    config.update({k: v for k, v in settings.items() if k not in ('source', 'vault')} | {'edit_settle_seconds': 0})
+    conf.write_text(json.dumps(config))
+    rc, out = invoke('sync')
+    check('the first sync exports the fixture vault', rc == 0 and status_file.is_file(), out)
+    view = vault / '_Folderwise Tasks' / 'lab-notes.md'
+
+    def titles(text):
+        """Task lines without the generated source links, so the comparison ignores link identities and layout."""
+        return [re.sub(r' \(\[source\]\([^)]*\)\)', '', line) for line in text.splitlines() if re.match(r'\s*(?:[>\s]*)(?:\d+\.|-) \[.\] ', line)]
+    check('the regenerated task view matches the stored vault view', titles(view.read_text()) == titles((fixture / 'vault/_Folderwise Tasks/lab-notes.md').read_text())
+          and len(titles(view.read_text())) > 40, view.read_text()[:300])
+    check('the regenerated dashboard matches the stored one', (vault / 'Tasks.md').read_text() == (fixture / 'vault/Tasks.md').read_text())
+    exported = view.read_text()
+
+    # --- load the rejection history: ledger (aged into the retention window) and saved phone text --------------------
+    now = time.time()
+    shift = now - 3600 - max(e['epoch'] for e in stored['imports'] + stored['rejected'])
+    aged = {kind: [dict(e, epoch=e['epoch'] + shift) for e in entries] for kind, entries in stored.items()}
+    (home / 'ledger.json').write_text(json.dumps(aged))
+    shutil.copytree(fixture / 'rejected', home / 'rejected', dirs_exist_ok=True)
+    for path in (home / 'rejected').rglob('*'):
+        os.utime(path, (now, now))
+    saved_before = {p.parent.name: p.read_bytes() for p in (home / 'rejected').glob('*/*.md')}
+    rc, out = invoke('sync')
+    report_text = status_file.read_text()
+    check('syncing over the stuck history succeeds and keeps the vault view', rc == 0 and view.read_text() == exported, out)
+    check('the status report has the phone-edit recovery callout', '[!warning] Phone edits not applied' in report_text
+          and '10 past rejections' in report_text and '`rejected/` folder' in report_text and 'recovery steps' in report_text, report_text)
+    reasons = {e['reason'] for e in stored['rejected']}
+    missing = sorted(r for r in reasons if r not in report_text)
+    check('the report keeps all ten rejections reachable, newest and oldest included', not missing
+          and stored['rejected'][0]['reason'] in report_text and stored['rejected'][-1]['reason'] in report_text, str(missing))
+    check('the report lists the imports from the fixture history', all(e['commit'] in report_text for e in stored['imports']))
+    check('the report names no source or state path and no phone text', str(source) not in report_text and str(home) not in report_text
+          and 'AT-B01' not in report_text)
+    check('saved rejected copies are untouched by the sync', {p.parent.name: p.read_bytes() for p in (home / 'rejected').glob('*/*.md')} == saved_before)
+    after = json.loads((home / 'ledger.json').read_text())
+    check('the ledger still holds the ten rejections and ten imports', [e['reason'] for e in after['rejected']] == [e['reason'] for e in stored['rejected']]
+          and [e['commit'] for e in after['imports']] == [e['commit'] for e in stored['imports']])
+
+    # --- the stuck edit: Obsidian on the phone re-saves the rejected text ------------------------------------------
+    newest = max((home / 'rejected').glob('*/*.md'), key=lambda p: p.parent.name)
+    view.write_text(newest.read_text())
+    rc, out = invoke('sync')
+    report_text = status_file.read_text()
+    check('re-saving the rejected text is rejected again and the view restored', view.read_text() == exported
+          and 'NOTICE _Folderwise Tasks/lab-notes.md' in out, out)
+    saved_after = {p.parent.name for p in (home / 'rejected').glob('*/*.md')}
+    check('the new rejection adds a saved copy and removes none', set(saved_before) < saved_after, str(sorted(saved_after)))
+    oldest = stored['rejected'][0]
+    check('the ledger keeps its latest ten rejections, so the oldest entry leaves the report but its saved copy stays',
+          len(json.loads((home / 'ledger.json').read_text())['rejected']) == 10 and oldest['at'] not in report_text
+          and '20261026T215843Z' in saved_after and stored['rejected'][-1]['at'] in report_text, report_text)
+
 
 def s_ibridge_setup():
     """Verify explicit vault setup, persistent project defaults, and safe uninstall."""
@@ -3480,7 +3580,7 @@ SECTIONS = [
     ("create", s_create), ("new_doc", s_new_doc_and_index), ("create_version", s_create_version), ("stamp", s_stamp_and_hook), ("hook", s_hook_fail_closed),
     ("lint", s_lint_rules), ("timezone", s_timezone), ("links", s_links), ("staged_source", s_staged_source), ("markdown_fences", s_markdown_fences), ("toc", s_toc), ("mv", s_mv),
     ("tables", s_tables), ("stale", s_stale_index_recent), ("sync", s_sync),
-    ("ibridge_tasks", s_ibridge_tasks), ("ibridge_rich_adapter", s_ibridge_rich_adapter), ("ibridge", s_ibridge), ("ibridge_rename", s_ibridge_rename), ("ibridge_isolation", s_ibridge_isolation), ("ibridge_notes", s_ibridge_notes), ("ibridge_transient", s_ibridge_transient), ("ibridge_status", s_ibridge_status), ("ibridge_setup", s_ibridge_setup), ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache),
+    ("ibridge_tasks", s_ibridge_tasks), ("ibridge_rich_adapter", s_ibridge_rich_adapter), ("ibridge", s_ibridge), ("ibridge_rename", s_ibridge_rename), ("ibridge_isolation", s_ibridge_isolation), ("ibridge_notes", s_ibridge_notes), ("ibridge_transient", s_ibridge_transient), ("ibridge_status", s_ibridge_status), ("ibridge_fixture", s_ibridge_fixture), ("ibridge_setup", s_ibridge_setup), ("doctor", s_doctor), ("layout", s_layout), ("cli_errors", s_cli_errors), ("failure_paths", s_failure_paths), ("uv_cache", s_uv_cache),
     ("framework_checkout", s_framework_checkout), ("framework_index", s_framework_index), ("ci_allowlist", s_ci_allowlist),
 ]
 

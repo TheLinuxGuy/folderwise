@@ -1,0 +1,186 @@
+{
+  "imports": [
+    {
+      "at": "2026-10-26 21:24 UTC",
+      "commit": "6e11eea",
+      "deleted": 0,
+      "edited": 0,
+      "epoch": 1793049862.691123,
+      "metadata": 1,
+      "project": "rich-csv",
+      "recurred": 0,
+      "renamed": 0,
+      "toggled": 1
+    },
+    {
+      "at": "2026-10-26 21:28 UTC",
+      "commit": "dd7c9b3",
+      "deleted": 0,
+      "edited": 0,
+      "epoch": 1793050105.970888,
+      "metadata": 0,
+      "project": "rich-csv",
+      "recurred": 0,
+      "renamed": 1,
+      "toggled": 0
+    },
+    {
+      "at": "2026-10-27 03:52 UTC",
+      "commit": "36abb3a",
+      "deleted": 0,
+      "edited": 1,
+      "epoch": 1793073154.7061582,
+      "metadata": 0,
+      "project": "lab-notes",
+      "recurred": 0,
+      "renamed": 0,
+      "toggled": 0
+    },
+    {
+      "at": "2026-10-27 03:56 UTC",
+      "commit": "bf00b5b",
+      "deleted": 0,
+      "edited": 0,
+      "epoch": 1793073397.876503,
+      "metadata": 1,
+      "project": "lab-notes",
+      "recurred": 0,
+      "renamed": 0,
+      "toggled": 1
+    },
+    {
+      "at": "2026-10-27 04:01 UTC",
+      "commit": "debd5d0",
+      "deleted": 0,
+      "edited": 1,
+      "epoch": 1793073701.540031,
+      "metadata": 0,
+      "project": "lab-notes",
+      "recurred": 0,
+      "renamed": 0,
+      "toggled": 0
+    },
+    {
+      "at": "2026-10-27 04:10 UTC",
+      "commit": "804c502",
+      "deleted": 0,
+      "edited": 1,
+      "epoch": 1793074248.012627,
+      "metadata": 0,
+      "project": "lab-notes",
+      "recurred": 0,
+      "renamed": 0,
+      "toggled": 0
+    },
+    {
+      "at": "2026-10-27 04:31 UTC",
+      "commit": "8468d78",
+      "deleted": 0,
+      "edited": 0,
+      "epoch": 1793075491.5896242,
+      "metadata": 7,
+      "project": "lab-notes",
+      "recurred": 0,
+      "renamed": 0,
+      "toggled": 0
+    },
+    {
+      "at": "2026-10-27 04:52 UTC",
+      "commit": "84f19fd",
+      "deleted": 0,
+      "edited": 0,
+      "epoch": 1793076761.819624,
+      "metadata": 1,
+      "project": "lab-notes",
+      "recurred": 0,
+      "renamed": 0,
+      "toggled": 0
+    },
+    {
+      "at": "2026-10-27 05:40 UTC",
+      "commit": "8a52d99",
+      "deleted": 0,
+      "edited": 0,
+      "epoch": 1793079620.415615,
+      "metadata": 1,
+      "project": "lab-notes",
+      "recurred": 0,
+      "renamed": 1,
+      "toggled": 0
+    },
+    {
+      "at": "2026-10-29 03:31 UTC",
+      "commit": "9a8b5c1",
+      "deleted": 0,
+      "edited": 0,
+      "epoch": 1793244705.36775,
+      "metadata": 0,
+      "project": "lab-notes",
+      "recurred": 0,
+      "renamed": 0,
+      "toggled": 1
+    }
+  ],
+  "rejected": [
+    {
+      "at": "2026-10-26 21:58 UTC",
+      "epoch": 1793051923.852565,
+      "file": "_Folderwise Tasks/lab-notes.md",
+      "reason": "reordering, duplicating or deleting tasks is not supported; keep each task source link"
+    },
+    {
+      "at": "2026-10-27 03:39 UTC",
+      "epoch": 1793072367.084953,
+      "file": "_Folderwise Tasks/lab-notes.md",
+      "reason": "reordering, duplicating or deleting tasks is not supported; keep each task source link"
+    },
+    {
+      "at": "2026-10-27 04:19 UTC",
+      "epoch": 1793074793.168177,
+      "file": "_Folderwise Tasks/lab-notes.md",
+      "reason": "source link identity changed; restore the complete original source link"
+    },
+    {
+      "at": "2026-10-27 04:42 UTC",
+      "epoch": 1793076156.311142,
+      "file": "_Folderwise Tasks/lab-notes.md",
+      "reason": "duplicate task field: id"
+    },
+    {
+      "at": "2026-10-27 04:58 UTC",
+      "epoch": 1793077124.3251321,
+      "file": "_Folderwise Tasks/lab-notes.md",
+      "reason": "lab-notes: task title or metadata conflict: due also changed on the Mac"
+    },
+    {
+      "at": "2026-10-27 05:02 UTC",
+      "epoch": 1793077366.562177,
+      "file": "_Folderwise Tasks/lab-notes.md",
+      "reason": "lab-notes: a task cannot be renamed from the phone (its title is empty or contains links or images); edit it on the Mac"
+    },
+    {
+      "at": "2026-10-27 05:11 UTC",
+      "epoch": 1793077910.342481,
+      "file": "_Folderwise Tasks/lab-notes.md",
+      "reason": "that title is already used by another task; reordering or duplicating tasks is not supported"
+    },
+    {
+      "at": "2026-10-27 05:17 UTC",
+      "epoch": 1793078273.895165,
+      "file": "_Folderwise Tasks/lab-notes.md",
+      "reason": "that title is already used by another task; reordering or duplicating tasks is not supported"
+    },
+    {
+      "at": "2026-10-27 05:20 UTC",
+      "epoch": 1793078455.744033,
+      "file": "_Folderwise Tasks/lab-notes.md",
+      "reason": "a title cannot contain comment markers, a source link or a checkbox, or start with = + - @"
+    },
+    {
+      "at": "2026-10-27 05:23 UTC",
+      "epoch": 1793078637.638567,
+      "file": "_Folderwise Tasks/lab-notes.md",
+      "reason": "a title must be 1-200 characters"
+    }
+  ]
+}
