@@ -1,0 +1,13 @@
+{
+  "edit_settle_seconds": 120,
+  "enabled": true,
+  "interval_minutes": 5,
+  "max_image_bytes": null,
+  "max_images_total_bytes": null,
+  "mode": "lean",
+  "notifications": "errors",
+  "source": "<SOURCE>",
+  "text_edits": true,
+  "vault": "<VAULT>",
+  "version": 1
+}

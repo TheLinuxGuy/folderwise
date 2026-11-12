@@ -25,7 +25,24 @@ The pinned runtime fixtures in `_tools/fixtures/obsidian_tasks_8_6_0.json` were 
 | `ibridge_notes` | Opt-in phone text edits to copied notes: the two switches, patterns, quiet period, protected regions, limits, Mac conflicts, CRLF, recovery. |
 | `ibridge_transient` | A brief iCloud file lock (`EDEADLK`) is retried quietly and the third consecutive failure is reported. |
 | `ibridge_status` | The status report as source of truth: a mocked transport drives about 50 scenarios (successes, rejections, pauses, bridge-wide freezes, iCloud artefacts, report ownership, doctor) and each is judged by the report, the CLI output, `last-run.json`, alert counts and report privacy. |
+| `ibridge_fixture` | The stuck-phone-edits fixture: a stored, fictional test vault whose iPhone edits were rejected ten times is rebuilt in a temp folder and run through the real bridge. The report must show the recovery callout and all ten rejections, the saved phone text must survive, and a re-saved rejected view must be rejected again and restored. |
 | `ibridge_setup` | Setup, enrollment, future-project defaults, uninstall and schedule lifecycle. |
+
+### Stuck-edit fixture
+
+`_tools/fixtures/stuck_edit_vault/` preserves a real test vault whose iPhone edits got stuck, so the status report and recovery path can be tested, screenshotted and demonstrated without a phone. It holds plain files only; the self-test builds everything else in a temporary folder.
+
+| Path | Contents |
+| --- | --- |
+| `source/lab-notes/` | The fictional project's notes (`docs.yaml` stands in for `.docs.yaml`, which the framework index refuses). The self-test runs `git init`, commits them and generates the 1 MiB attachment that lean mode omits. |
+| `ledger.json` | The original bridge ledger: ten rejected phone saves (2026-10-26 and 2026-10-27, `lab-notes`) and ten imports (`rich-csv` and `lab-notes` commits from the original run). |
+| `rejected/` | The ten saved phone copies that match those rejections, one folder per save as the bridge writes them. |
+| `vault/` | The dashboard and the `lab-notes` task view as exported at the time; the self-test compares the regenerated task lines with them. |
+| `config.json` | The bridge settings (lean mode, five-minute interval, error notifications, text edits on) with `<SOURCE>` and `<VAULT>` in place of local paths. |
+
+Provenance: all content is fictional acceptance-test data from the 0.2.0 real-iPhone run, copied from the original test bridge with machine paths, caches, logs, notifier state, the generated `_folderwise-sync-status.md` and the `.obsidian` folder removed. The generated status note is not stored because the bridge regenerates it and its layout changes. The `rich-csv` and `trip-notes` projects are omitted (their adapters are not involved in the stuck edits); their `rich-csv` imports remain in the ledger as history.
+
+The ledger and saved copies are aged into the 30-day retention window when loaded, because the bridge forgets older ones. To keep the rebuilt source, state and vault for manual inspection, run `uv run _tools/selftest.py -k ibridge_fixture --keep`.
 
 ## Real-iPhone acceptance checklist
 
@@ -190,7 +207,7 @@ These came from a real fictional-data acceptance run on a Mac and iPhone. Tests 
 
 ## Traceability table
 
-Each row is a scenario from the checklist. **Automated checks** are exact labels from `_tools/selftest.py` (sections `ibridge`, `ibridge_rename`, `ibridge_isolation`, `ibridge_notes`, `ibridge_transient`, `ibridge_status`, `ibridge_setup`). **Manual only** means no software check can prove it; the third column says what a real device must still confirm. **Gap** means the behavior is automatable but has no self-test yet; it is a to-do, not an accepted state.
+Each row is a scenario from the checklist. **Automated checks** are exact labels from `_tools/selftest.py` (sections `ibridge`, `ibridge_rename`, `ibridge_isolation`, `ibridge_notes`, `ibridge_transient`, `ibridge_status`, `ibridge_fixture`, `ibridge_setup`). **Manual only** means no software check can prove it; the third column says what a real device must still confirm. **Gap** means the behavior is automatable but has no self-test yet; it is a to-do, not an accepted state.
 
 | ID | Scenario | Automated checks | Needs a real device or person |
 | --- | --- | --- | --- |
@@ -259,6 +276,7 @@ Each row is a scenario from the checklist. **Automated checks** are exact labels
 | S10 | The report file is bridge-owned: an edited report or legacy report is never overwritten | `an edited status report is never overwritten and the CLI says why`<br>`restoring the report resumes normal syncing`<br>`an unowned legacy report is flagged in the report and preserved`<br>`removing the legacy report clears the warning` | None |
 | S11 | Source and config problems: unavailable source removes nothing, invalid config stops before export, doctor agrees with the report | `an unavailable source is reported in the status file and removes nothing`<br>`restoring the source recovers`<br>`an invalid bridge config stops before any export and says so on the CLI`<br>`doctor agrees with a clean report`<br>`doctor reports the last issue state`<br>`doctor stays healthy after handled rejections` | Config errors cannot appear in the report (CLI and doctor only) |
 | S12 | Privacy: the report and alerts never contain phone-typed text, source or state paths | `alerts carry no task or document text` | None (every `ibridge_status` scenario also asserts this for the report) |
+| S13 | A vault with a long history of rejected phone edits shows the recovery callout and every rejection, keeps the saved phone text, and rejects a re-saved copy again | `the status report has the phone-edit recovery callout`<br>`the report keeps all ten rejections reachable, newest and oldest included`<br>`saved rejected copies are untouched by the sync`<br>`re-saving the rejected text is rejected again and the view restored`<br>`the ledger keeps its latest ten rejections, so the oldest entry leaves the report but its saved copy stays` | Reading the callout and opening the `rejected/` folder on a real Mac and iPhone |
 | F1 | Metadata positions and hierarchy are preserved | `task metadata follows the source link and block IDs remain last`<br>`task hierarchy preserves tabs, numbered children, non-task parents and continuation text`<br>`swapping repeated child rows cannot become unintended toggles` | Reading/live-preview hierarchy, callouts and continuation rendering on iPhone |
 | F2 | Automatic completion, cancellation and reopening round trip | `plugin completion with an automatic done date imports atomically`<br>`reopening a task clears stale completion metadata`<br>`plugin cancellation with its date imports`<br>`Dataview lifecycle fields import` | Real checkbox and status controls with automatic dates enabled |
 | F3 | Recurrence and explicit completion deletion are atomic and idempotent | `recurrence creates its next occurrence and completes the original atomically`<br>`replaying a recurring sync creates no duplicate occurrence or commit`<br>`explicit on-completion delete removes only its authoritative task line`<br>`recurrence with on-completion delete keeps just the next occurrence` | Test daily, weekly, monthly, when-done, undated recurrence and both plugin row-order settings |
