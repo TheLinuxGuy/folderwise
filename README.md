@@ -111,6 +111,12 @@ Every tool, flag and setting is documented in the [full guide](docs/guide.md).
 - **Rename tasks** with per-project opt-in, or **edit selected notes** with both the bridge text-edit switch and project path-pattern opt-in. Generated task views accept only supported task edits.
 - **Keep a local history.** An available Mac validates imports against clean working trees and conflict rules, updates source files, and commits locally. Local commits do not push to GitHub.
 
+<p align="center">
+  <img src="docs/assets/ibridge-iphone-sync-status.png" alt="Obsidian on iPhone showing a completed Mac sync and an amber warning with instructions for recovering earlier rejected phone edits" width="360">
+</p>
+
+The [sync status note](docs/obsidian.md#bridge-status-report) shows when the Mac last ran and whether that run reported issues. Earlier rejected edits appear separately.
+
 **New to the bridge?** The [Quick Start](docs/obsidian.md#quick-start) creates the iCloud vault with Tasks and Dataview ready to enable in Obsidian.
 
 Validated on a real iPhone for 0.2.0 ([88 checks, 85 pass, 3 blocked](docs/ibridge-acceptance-0.2.0.md)):

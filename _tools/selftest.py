@@ -1258,9 +1258,9 @@ def s_ibridge():
     rc,out=invoke('sync')
     check('status migration recognizes an unchanged copy at the new name',rc==0 and report_path.exists() and not legacy.exists()
           and json.loads((home/'report.json').read_text())['path']=='_folderwise-sync-status.md',out)
-    stamp=report_path.stat().st_mtime_ns
     rc,out=invoke('sync')
-    check('migrated status report is idempotent',rc==0 and report_path.stat().st_mtime_ns==stamp,out)
+    check('migrated status report refreshes without recreating the legacy report',
+          rc==0 and 'Last Mac sync completed' in report_path.read_text() and not legacy.exists(),out)
     report_path.unlink();legacy.write_bytes(legacy_data)
     (home/'report.json').write_text(json.dumps(legacy_manifest))
     rc,out=invoke('sync')
@@ -1320,7 +1320,7 @@ def s_ibridge():
           and any('Phone prose edit' in text for text in saved_edits)
           and not any(p.stat().st_mode & 0o077 for p in (home / 'rejected').rglob('*')), out)
     status_text = (vault / '_folderwise-sync-status.md').read_text()
-    check('rejected phone edit is named in the status report', '## Phone edits not applied' in status_text and '_Folderwise Tasks/alpha.md' in status_text
+    check('rejected phone edit is named in the status report', '> [!warning] Phone edits not applied' in status_text and '_Folderwise Tasks/alpha.md' in status_text
           and 'title edits are off' in status_text, status_text)
     rc, out = invoke('sync')
     check('a restored view is not reported again', rc == 0 and 'NOTICE' not in out, out)
@@ -1376,14 +1376,15 @@ elif op=='validate':
     rc,out=invoke('sync')
     check('full mode exports other tracked content',rc==0 and (vault/'alpha/large.pdf').exists(),out)
     invoke('configure','--mode','lean','--max-image-bytes','5','--max-images-total-bytes','4')
-    rc,out=invoke('sync')
+    frozen_report_time={'DOCS_FAKE_NOW':'2026-11-11T22:00'}
+    rc,out=invoke('sync',env=frozen_report_time)
     status=(vault/'_folderwise-sync-status.md').read_text()
     check('lean mode honors both limits and cleans unchanged owned copies',rc==0 and (vault/'alpha/docs/assets/a.png').exists()
           and not (vault/'alpha/large.pdf').exists() and not (vault/'alpha/docs/assets/unused.png').exists()
           and 'exceeds per-image limit' in status and 'exceeds aggregate image limit' in status,out)
     stamp=(vault/'_folderwise-sync-status.md').stat().st_mtime_ns
-    invoke('sync')
-    check('unchanged report does not churn every scheduled run',(vault/'_folderwise-sync-status.md').stat().st_mtime_ns==stamp)
+    invoke('sync',env=frozen_report_time)
+    check('identical report bytes are not rewritten',(vault/'_folderwise-sync-status.md').stat().st_mtime_ns==stamp)
     invoke('configure','--unlimited-images')
     rc,out=invoke('sync')
     check('unlimited image setting restores all referenced images',rc==0 and (vault/'alpha/docs/assets/b.png').exists()
@@ -2411,7 +2412,7 @@ def s_ibridge_status():
         return (root / 'banners').read_text() if (root / 'banners').exists() else ''
 
     def section(text, title):
-        m = re.search(r'^## ' + re.escape(title) + r'\n\n(.*?)(?=\n## |\Z)', text, re.S | re.M)
+        m = re.search(r'^## ' + re.escape(title) + r'\n\n(.*?)(?=\n## |\n> \[!|\Z)', text, re.S | re.M)
         return m[1].strip() if m else None
 
     def bullets(text):
@@ -2491,14 +2492,30 @@ def s_ibridge_status():
         path.write_text(edit(path.read_text()))
 
     # --- success paths -------------------------------------------------------------------------------------------
-    out, text = observe('a clean export reports no issues and its sizes', 0, present=['# Folderwise sync status', 'Mode: **full**', 'Estimated managed export', '## Omitted files'],
-                        absent=['Paused projects', 'Phone edits not applied', 'Recent imports', 'iCloud conflict copies'])
+    invoke('configure', '--max-image-bytes', '1500000', '--max-images-total-bytes', '0')
+    out, text = observe('a clean export reports no issues and its sizes', 0,
+                        present=['> [!info]- Export details', '**Mode:** Full', 'Estimated managed export', '## Omitted files',
+                                 '**Image limit per file:** 1.50 MB (1,500,000 bytes)', '**Total image limit:** 0 bytes'],
+                        absent=['Paused projects', 'Phone edits not applied', 'Recent imports', 'iCloud conflict copies'],
+                        extra={'DOCS_FAKE_NOW': '2026-11-11T22:00'})
     check('the status report is a bridge-owned file with a recorded hash', json.loads((home / 'report.json').read_text())['hash'] == hashlib.sha256(status_file.read_bytes()).hexdigest())
+    check('sync shows a UTC timestamp above Mode that matches last-run.json',
+          text.startswith('# Folderwise sync status\n\n> [!success] Last Mac sync completed\n> **2026-11-11 22:00:00 UTC**\n'
+                          '> No issues reported in this run.')
+          and json.loads((home / 'last-run.json').read_text())['last_run'] == '2026-11-11T22:00:00+00:00', text)
+    receipt = json.loads((home / 'report.json').read_text())
+    _, refreshed = observe('a no-op sync refreshes the timestamp', 0, extra={'DOCS_FAKE_NOW': '2026-11-11T22:05'})
+    check('a no-op sync changes only the report timestamp', refreshed == text.replace('22:00:00 UTC', '22:05:00 UTC'), refreshed)
+    # Simulate an interruption after the report write, before the receipt was finalized.
+    (home / 'report.json').write_text(json.dumps({
+        **receipt, 'pending_hashes': [receipt['hash'], hashlib.sha256(status_file.read_bytes()).hexdigest()],
+    }))
+    observe('the status report recovers an interrupted timestamp refresh', 0,
+            present=['> **2026-11-11 22:10:00 UTC**'], extra={'DOCS_FAKE_NOW': '2026-11-11T22:10'})
     stamp = status_file.stat().st_mtime_ns
-    observe('an unchanged run leaves the report byte-for-byte alone', 0)
-    check('and does not rewrite it', status_file.stat().st_mtime_ns == stamp)
     observe('plan never changes the report', 0, command='plan')
     check('plan left the report alone', status_file.stat().st_mtime_ns == stamp)
+    invoke('configure', '--unlimited-images')
     phone(views['alpha'], lambda s: s.replace('- [ ] A1 task', '- [x] A1 task'))
     out, text = observe('a toggle import is listed', 0, present=['## Recent imports', '| alpha |'])
     check('the listed commit is the import commit', sh(['git', 'rev-parse', '--short', 'HEAD'], cwd=alpha)[1].strip() in text, text)
@@ -2530,7 +2547,11 @@ def s_ibridge_status():
     # --- phone edits that cannot be applied ---------------------------------------------------------------------
     before = heads()
     phone(views['alpha'], lambda s: s + 'PHONE-SECRET new line\n')
-    out, text = observe('an added phone line is rejected, restored and named without echoing the text', 0, present=['## Phone edits not applied', '_Folderwise Tasks/alpha.md', 'number of lines changed'], absent=['PHONE-SECRET'])
+    out, text = observe('an added phone line is rejected, restored and named without echoing the text', 0,
+                        present=['> [!success] Last Mac sync completed', '> [!warning] Phone edits not applied',
+                                 '1 past rejection', '`rejected/` folder', '[See recovery steps]',
+                                 '## Rejection history', '_Folderwise Tasks/alpha.md', 'number of lines changed'],
+                        absent=['PHONE-SECRET'])
     check('the rejected view is restored and nothing was committed', 'PHONE-SECRET' not in views['alpha'].read_text() and heads() == before)
     check('rejected phone edits send an alert', banners().count('needs attention') == alerts + 1, banners())
     phone(views['alpha'], lambda s: re.sub(r'(A1 task[^\n]*\))', r'\1 PHONE-SECRET', s, count=1))
@@ -2647,7 +2668,9 @@ def s_ibridge_status():
     observe('restoring the report resumes normal syncing', 0)
     legacy = vault / 'Bridge Status.md'
     legacy.write_text('old report with my notes\n')
-    observe('an unowned legacy report is flagged in the report and preserved', 1, issues=['Bridge Status.md: legacy report has unowned edits'])
+    observe('an unowned legacy report is flagged in the report and preserved', 1,
+            issues=['Bridge Status.md: legacy report has unowned edits'],
+            present=['> [!warning] Last Mac sync completed with issues'])
     legacy.unlink()
     observe('removing the legacy report clears the warning', 0)
 

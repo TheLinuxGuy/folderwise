@@ -1223,22 +1223,42 @@ def cell(value):
     return str(value).replace("|", "&#124;").replace("\n", " ")
 
 
-def report(files, omissions, issues, settings, managed_bytes, ledger=None, copies=(), paused=(), waiting=()):
+def display_size(size):
+    if size is None:
+        return "Unlimited"
+    exact = f"{size:,} {'byte' if size == 1 else 'bytes'}"
+    for unit, scale in (("TB", 10**12), ("GB", 10**9), ("MB", 10**6), ("KB", 10**3)):
+        if size >= scale:
+            return f"{size / scale:,.2f} {unit} ({exact})"
+    return exact
+
+
+def report(files, omissions, issues, settings, managed_bytes, updated_at, ledger=None, copies=(), paused=(), waiting=()):
     image_bytes = sum(content_size(data) for key, data in files.items() if Path(key).suffix.lower() in IMAGES)
-    rows = ["# Folderwise sync status", "", f"Mode: **{settings['mode']}**. Interval: **{settings['interval_minutes']} minutes**.",
-            f"Estimated managed export: **{sum(content_size(data) for data in files.values()):,} bytes**, including **{image_bytes:,} image bytes**.",
-            f"Currently present managed payload: **{managed_bytes:,} bytes** (excludes status/settings and unowned files).",
-            "This is a file-size estimate, not your iCloud account usage or bill.",
-            f"Image limits: per file={settings['max_image_bytes']}; aggregate={settings['max_images_total_bytes']} bytes (None = unlimited).", "", "## Issues", ""]
+    callout = "> [!warning] Last Mac sync completed with issues" if issues else "> [!success] Last Mac sync completed"
+    result = "> See **Issues** below." if issues else "> No issues reported in this run."
+    minutes = settings['interval_minutes']
+    rows = ["# Folderwise sync status", "", callout, f"> **{updated_at:%Y-%m-%d %H:%M:%S %Z}**", result]
+    ledger = ledger or {}
+    rejected = ledger.get("rejected", [])
+    if rejected:
+        count = len(rejected)
+        dates = sorted({entry["at"].split()[0] for entry in rejected})
+        period = dates[0] if len(dates) == 1 else f"{dates[0]} to {dates[-1]}"
+        rows += ["", "> [!warning] Phone edits not applied",
+                 f"> **{count} past {'rejection' if count == 1 else 'rejections'} · {period}**", ">",
+                 f"> Folderwise restored the affected task views and saves rejected text on your Mac for {KEEP_DAYS} days.", ">",
+                 "> **To recover an edit**, open the bridge’s `rejected/` folder on your Mac. "
+                 "Review the saved copy and apply the intended change in the source project.", ">",
+                 "> [See recovery steps](https://github.com/TheLinuxGuy/folderwise/blob/main/docs/obsidian.md#conflicts-and-recovery)"]
+    rows += ["", f"**Configured interval:** Every {minutes} {'minute' if minutes == 1 else 'minutes'}.", "",
+            "If this time stops advancing, check the bridge on your Mac. iCloud delivery can lag.", "", "## Issues", ""]
     rows += ["- " + str(x).replace("\n", " ") for x in issues] or ["None."]
     if paused:
         rows += ["", "Paused projects: " + ", ".join(cell(p) for p in paused) + ". Their imports and exports wait until the issue is fixed; other projects keep syncing."]
-    ledger = ledger or {}
-    if ledger.get("rejected"):
-        rows += ["", "## Phone edits not applied", "",
-                 "The text was saved on the Mac outside iCloud and the generated view was restored.", "",
-                 "| When | File | Reason |", "| --- | --- | --- |"]
-        rows += [f"| {e['at']} | {cell(e['file'])} | {cell(e['reason'])} |" for e in ledger["rejected"]]
+    if rejected:
+        rows += ["", "## Rejection history", ""]
+        rows += [f"- **{cell(e['file'])}** · {e['at']}\n  {cell(e['reason'])}" for e in rejected]
     if waiting:
         rows += ["", "## Phone edits waiting", "", "These notes are imported once their text has stayed unchanged for the quiet period.", ""]
         rows += [f"- {cell(w)}" for w in waiting]
@@ -1248,8 +1268,16 @@ def report(files, omissions, issues, settings, managed_bytes, ledger=None, copie
     if copies:
         rows += ["", "## iCloud conflict copies", "", "These files were not imported. Compare each with its original and delete the one you do not want.", ""]
         rows += [f"- {cell(c)}" for c in copies]
-    rows += ["", "## Omitted files", "", "| Path | Bytes | Reason |", "| --- | ---: | --- |"]
-    rows += [f"| {x['path'].replace('|', '&#124;')} | {x['bytes']} | {x['reason']} |" for x in omissions]
+    rows += ["", "> [!info]- Export details",
+             f"> - **Mode:** {settings['mode'].capitalize()}",
+             f"> - **Estimated managed export:** {display_size(sum(content_size(data) for data in files.values()))}",
+             f"> - **Images included:** {display_size(image_bytes)}",
+             f"> - **Current managed payload:** {display_size(managed_bytes)} (excludes status, settings and unowned files)",
+             f"> - **Image limit per file:** {display_size(settings['max_image_bytes'])}",
+             f"> - **Total image limit:** {display_size(settings['max_images_total_bytes'])}",
+             ">", "> These figures describe the vault files. For iCloud account usage, check iCloud settings.",
+             "", "## Omitted files", "", "| Path | Size | Reason |", "| --- | ---: | --- |"]
+    rows += [f"| {cell(x['path'])} | {display_size(x['bytes'])} | {x['reason']} |" for x in omissions]
     return ("\n".join(rows) + "\n").encode()
 
 
@@ -1532,19 +1560,24 @@ def sync(settings, home, dry=False):
         issues.append(f'{LEGACY_REPORT}: legacy report has unowned edits; preserved. Move it outside the vault after review.')
     copies = conflict_copies(vault, set(accepted_state['files']) | set(files)) if not issues else []
     issues.extend(held.values())
-    status = report(files, omissions, issues, settings, managed_bytes, ledger, copies, sorted(held), sorted(waiting))
+    run_at = dl.now({'timezone': 'UTC'})
+    status = report(files, omissions, issues, settings, managed_bytes, run_at, ledger, copies, sorted(held), sorted(waiting))
+    status_hash = digest(status)
     target = safe(vault, REPORT)
-    if target.exists() and content_hash(target) not in {previous_report.get('hash'), digest(status)}:
+    before = existing_hash(target)
+    if before is not None and before not in {previous_report.get('hash'), *previous_report.get('pending_hashes', ()), status_hash}:
         raise ValueError(f'{REPORT} has unowned edits; preserve/rename it before retrying')
-    if not target.exists() or target.read_bytes() != status:
+    if before != status_hash:
+        # Keep both hashes until the report and its ownership record agree, including after interruption.
+        save(home / 'report.json', {**previous_report, 'pending_hashes': [before, status_hash]})
         atomic(target, status)
     if legacy_owned:
         if existing_hash(legacy) != legacy_before:
             raise ValueError(f'{LEGACY_REPORT}: changed during migration; preserved')
         legacy.unlink()
-    save(home / 'report.json', {'path': REPORT, 'hash': digest(status)})
+    save(home / 'report.json', {'path': REPORT, 'hash': status_hash})
     last = {'issues': issues, 'notices': notices, 'omitted_files': len(omissions), 'selected_bytes': total, 'managed_bytes': managed_bytes,
-            'last_run': dl.now({'timezone': 'UTC'}).isoformat(), 'last_run_epoch': time.time(), 'ok': not issues}
+            'last_run': run_at.isoformat(), 'last_run_epoch': time.time(), 'ok': not issues}
     previous = read_json(home / 'last-run.json', {})
     actionable = [item for item in omissions if item['reason'] != 'excluded by lean mode']
     signature = digest(json.dumps([issues, notices, actionable], sort_keys=True).encode())
