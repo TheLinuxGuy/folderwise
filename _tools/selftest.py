@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 SRC_TOOLS = Path(__file__).resolve().parent
@@ -1320,8 +1321,8 @@ def s_ibridge():
           and any('Phone prose edit' in text for text in saved_edits)
           and not any(p.stat().st_mode & 0o077 for p in (home / 'rejected').rglob('*')), out)
     status_text = (vault / '_folderwise-sync-status.md').read_text()
-    check('rejected phone edit is named in the status report', '> [!warning] Phone edits not applied' in status_text and '_Folderwise Tasks/alpha.md' in status_text
-          and 'title edits are off' in status_text, status_text)
+    check('rejected phone edit is named in the status report', '> [!warning] Phone edits not applied' in status_text and '## Rejection history' in status_text
+          and '**Alpha** · ' in status_text and 'title edits are off' in status_text, status_text)
     rc, out = invoke('sync')
     check('a restored view is not reported again', rc == 0 and 'NOTICE' not in out, out)
     # Adapter lives in project, uses a CSV, and hides completed rows in normal Markdown.
@@ -2500,18 +2501,18 @@ def s_ibridge_status():
                         extra={'DOCS_FAKE_NOW': '2026-11-11T22:00'})
     check('the status report is a bridge-owned file with a recorded hash', json.loads((home / 'report.json').read_text())['hash'] == hashlib.sha256(status_file.read_bytes()).hexdigest())
     check('sync shows a UTC timestamp above Mode that matches last-run.json',
-          text.startswith('# Folderwise sync status\n\n> [!success] Last Mac sync completed\n> **2026-11-11 22:00:00 UTC**\n'
+          text.startswith('# Folderwise sync status\n\n> [!success] Last Mac sync completed\n> Nov 11, 22:00 UTC\n'
                           '> No issues reported in this run.')
           and json.loads((home / 'last-run.json').read_text())['last_run'] == '2026-11-11T22:00:00+00:00', text)
     receipt = json.loads((home / 'report.json').read_text())
     _, refreshed = observe('a no-op sync refreshes the timestamp', 0, extra={'DOCS_FAKE_NOW': '2026-11-11T22:05'})
-    check('a no-op sync changes only the report timestamp', refreshed == text.replace('22:00:00 UTC', '22:05:00 UTC'), refreshed)
+    check('a no-op sync changes only the report timestamp', refreshed == text.replace('22:00 UTC', '22:05 UTC'), refreshed)
     # Simulate an interruption after the report write, before the receipt was finalized.
     (home / 'report.json').write_text(json.dumps({
         **receipt, 'pending_hashes': [receipt['hash'], hashlib.sha256(status_file.read_bytes()).hexdigest()],
     }))
     observe('the status report recovers an interrupted timestamp refresh', 0,
-            present=['> **2026-11-11 22:10:00 UTC**'], extra={'DOCS_FAKE_NOW': '2026-11-11T22:10'})
+            present=['> Nov 11, 22:10 UTC'], extra={'DOCS_FAKE_NOW': '2026-11-11T22:10'})
     stamp = status_file.stat().st_mtime_ns
     observe('plan never changes the report', 0, command='plan')
     check('plan left the report alone', status_file.stat().st_mtime_ns == stamp)
@@ -2550,8 +2551,11 @@ def s_ibridge_status():
     out, text = observe('an added phone line is rejected, restored and named without echoing the text', 0,
                         present=['> [!success] Last Mac sync completed', '> [!warning] Phone edits not applied',
                                  '1 past rejection', '`rejected/` folder', '[See recovery steps]',
-                                 '## Rejection history', '_Folderwise Tasks/alpha.md', 'number of lines changed'],
+                                 '## Rejection history', '**Alpha** · ', 'number of lines changed'],
                         absent=['PHONE-SECRET'])
+    check('the collapsed export callout is directly above Issues and rejection history precedes it',
+          re.search(r'> \[!info\]- Export details\n(?:>[^\n]*\n)+\n## Issues\n', text) is not None
+          and text.index('## Rejection history') < text.index('> [!info]- Export details'), text)
     check('the rejected view is restored and nothing was committed', 'PHONE-SECRET' not in views['alpha'].read_text() and heads() == before)
     check('rejected phone edits send an alert', banners().count('needs attention') == alerts + 1, banners())
     phone(views['alpha'], lambda s: re.sub(r'(A1 task[^\n]*\))', r'\1 PHONE-SECRET', s, count=1))
@@ -2559,7 +2563,7 @@ def s_ibridge_status():
     phone(views['alpha'], lambda s: s.replace('A2 renamed', 'A2 [x](http://example.com) PHONE-SECRET'))
     observe('a link typed into a title is rejected with its reason', 0, present=['links or images'], absent=['PHONE-SECRET'])
     phone(views['gamma'], lambda s: s.replace('gamma tasks', 'gamma tasks PHONE-SECRET'))
-    observe('a title edit is refused when renames are off for the project', 0, present=['_Folderwise Tasks/gamma.md'], absent=['PHONE-SECRET'])
+    observe('a title edit is refused when renames are off for the project', 0, present=['**Gamma** · ', '## Earlier rejections', '> [!info]- Show earlier entries'], absent=['PHONE-SECRET'])
     phone(views['alpha'], lambda s: s.replace('A1 task', 'TMPX').replace('A2 renamed', 'A1 task').replace('TMPX', 'A2 renamed'))
     observe('swapped titles are refused', 0, present=['already used by another task'])
 
@@ -2696,6 +2700,30 @@ def s_ibridge_status():
     rc, out = invoke('doctor')
     check('doctor stays healthy after handled rejections', rc == 0, out)
     check('alerts carry no task or document text', 'PHONE-SECRET' not in banners() and all(l.startswith('Folderwise bridge needs attention.') for l in banners().splitlines() if l.strip()), banners())
+
+    # --- rejection history: date ranges and labels --------------------------------------------------------------
+    ledger_file = home / 'ledger.json'
+    saved_ledger = ledger_file.read_text()
+
+    def with_rejections(*entries):
+        # epoch stays current so pruning keeps the entries; "at" is display-only and can be any date
+        ledger = json.loads(saved_ledger)
+        ledger['rejected'] = [dict(at=at, file=name, reason=reason, epoch=time.time()) for at, name, reason in entries]
+        ledger_file.write_text(json.dumps(ledger))
+
+    with_rejections(('2026-12-28 09:00 UTC', '_Folderwise Tasks/alpha.md', 'older reason'),
+                    ('2027-01-02 10:30 UTC', 'alpha/docs/notes.md', 'newest reason'))
+    observe('a rejection range across years names both years and a mirrored note keeps its path', 0,
+            present=['**2 past rejections · Dec 28, 2026–Jan 2, 2027**', '**alpha/docs/notes.md** · Jan 2, 10:30 UTC', 'newest reason',
+                     '> - **_Folderwise Tasks/alpha.md** · 2026-12-28 09:00 UTC'])
+    with_rejections(('2026-10-30 09:00 UTC', '_Folderwise Tasks/alpha.md', 'older reason'),
+                    ('2026-11-02 10:30 UTC', '_Folderwise Tasks/alpha.md', 'newest reason'))
+    observe('a rejection range across months shows both days', 0, present=['**2 past rejections · Oct 30–Nov 2**', '**Alpha** · Nov 2, 10:30 UTC'])
+    with_rejections(('2026-11-03 09:00 UTC', '_Folderwise Tasks/alpha.md', 'older reason'),
+                    ('2026-11-09 10:30 UTC', '_Folderwise Tasks/alpha.md', 'newest reason'))
+    observe('a rejection range within a month shows the day span', 0, present=['**2 past rejections · Nov 3–9**'])
+    ledger_file.write_text(saved_ledger)
+    observe('the original rejection history comes back', 0, present=['Phone edits not applied'])
 
 
 def s_ibridge_tasks():

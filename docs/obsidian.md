@@ -355,11 +355,27 @@ Limits apply to individual images and all selected images across enabled project
 
 ### Bridge status report
 
-The callout at the top shows when the Mac last completed a sync, in UTC, and whether that run reported issues. The time advances after completed syncs with no changes. If it stops advancing on the phone, compare it with the Mac's `status` output to check whether a newer report is still on its way through iCloud. When rejected edits are in the history, the **Phone edits not applied** callout gives a count, a date range, and recovery instructions. The **Rejection history** lists the affected files and reasons.
+The callout at the top shows when the Mac last completed a sync, in UTC, and whether that run reported issues. The time advances after completed syncs with no changes. If it stops advancing on the phone, compare it with the Mac's `status` output to check whether a newer report is still on its way through iCloud. When rejected edits are in the history, the **Phone edits not applied** callout gives a count, a date range, and recovery instructions. **Rejection history** shows the latest affected file and reason. Below **Issues**, expand **Show earlier entries** to review older rejections.
+
+When the last run finished without issues and no phone edits were rejected, the note stays short:
+
+<p align="center">
+  <img src="assets/ibridge-iphone-sync-healthy.png" alt="Obsidian on iPhone showing a green Last Mac sync completed callout, collapsed Export details and no issues" width="360">
+</p>
+
+When a run reports a problem, the top callout turns amber and each issue is listed under **Issues**:
+
+<p align="center">
+  <img src="assets/ibridge-iphone-sync-warning.png" alt="Obsidian on iPhone showing an amber Last Mac sync completed with issues callout, the phone edit recovery callout, collapsed Export details and one issue listed under Issues" width="360">
+</p>
 
 The generated `_folderwise-sync-status.md` lives at the root of your iCloud vault. It lists sync issues and gives you details to investigate a notification. After a phone edit is imported or rejected it also shows up to ten recent entries, each kept 30 days: **Phone edits not applied** (when, file, reason, with line numbers; the exact text is saved on the Mac), **Recent imports** (when, project, local commit, toggles and renames), and **iCloud conflict copies** (files such as `note 2.md` created beside a managed file; they are reported and never imported, so compare each with its original and delete the one you do not want). The sections appear only when there is something to show. On upgrade, the bridge replaces an unchanged, bridge-owned `Bridge Status.md` with this name. An already-renamed, unchanged report is recognized too. Edited or unowned legacy reports are preserved and flagged in the new report; review and move them outside the vault to clear the warning. An existing edited destination is never overwritten.
 
-Expand **Export details** to see the estimated export size, image size, current managed payload and configured limits. Larger sizes include the exact byte count, for example **1.50 MB (1,500,000 bytes)**. The current payload excludes the status note, settings and unowned files. It can exceed the new selection when a conflict prevents cleanup. **Omitted files** lists paths, sizes and reasons. For total account usage, check iCloud settings.
+Expand **Export details** above **Issues** to see the configured interval, estimated export size, image size, current managed payload and configured limits. Larger sizes include the exact byte count, for example **1.50 MB (1,500,000 bytes)**. The current payload excludes the status note, settings and unowned files. It can exceed the new selection when a conflict prevents cleanup. **Omitted files** lists paths, sizes and reasons. For total account usage, check iCloud settings.
+
+<p align="center">
+  <img src="assets/ibridge-iphone-export-details.png" alt="Obsidian on iPhone with Export details expanded, showing the interval, mode, sizes with exact byte counts, and limits" width="360">
+</p>
 
 ## Schedule, notifications, and controls
 
