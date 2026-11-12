@@ -109,7 +109,7 @@ Lint checks structure and links, not whether a note is true. A verification date
 <summary>Prefer a release archive, or only the framework beside your own repositories?</summary>
 
 - **Release archive:** download from [GitHub Releases](https://github.com/TheLinuxGuy/folderwise/releases) and verify `SHA256SUMS`. [Install steps](docs/framework-checkout.md#install-from-a-release-archive); upgrades [copy framework files with backups](docs/framework-checkout.md#upgrading-an-archive-install). A clone upgrades with `git pull --ff-only`. Upgrades never touch your knowledge projects.
-- **Minimal pull-only checkout** (needs Git 2.25+): clone into a new folder, then preview and enable it. It omits public docs, images and CI files, so the `docs/` links on this page then work only online. [Setup and safety checks](docs/framework-checkout.md#minimal-pull-only-checkout).
+- **Minimal pull-only checkout** (needs Git 2.25+): clone into a new folder, then preview and enable it. It omits public docs, images, CI files and test data, so the `docs/` links on this page then work only online. [Setup and safety checks](docs/framework-checkout.md#minimal-pull-only-checkout).
 
 ```sh
 cd ~/folderwise

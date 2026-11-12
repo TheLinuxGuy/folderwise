@@ -21,7 +21,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PATTERNS = ('/_*/', '/.gitignore', '/.gitattributes', '/AGENTS.md', '/README.md', '/LICENSE', '/uv.toml')
+# Underscore folders are runtime framework folders and stay, except _tests/ (test data the tools do not need).
+PATTERNS = ('/_*/', '!/_tests/', '/.gitignore', '/.gitattributes', '/AGENTS.md', '/README.md', '/LICENSE', '/uv.toml')
 OPTIONAL_FILES = ('README.md', 'LICENSE')
 OMIT_KEY = 'folderwise.omittedRootFiles'
 SETTINGS = {
@@ -65,7 +66,7 @@ def preflight(remember_deletions: bool) -> set[str]:
 
 def excluded_directories() -> list[str]:
     return [name for name in git('ls-tree', '-d', '--name-only', '-z', 'HEAD').split('\0')
-            if name and not name.startswith('_')]
+            if name and (not name.startswith('_') or name == '_tests')]
 
 
 def check_leftovers() -> None:

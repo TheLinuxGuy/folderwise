@@ -54,6 +54,7 @@ The setup uses Git's persistent non-cone sparse checkout with this allowlist:
 
 ```text
 /_*/
+!/_tests/
 /.gitignore
 /.gitattributes
 /AGENTS.md
@@ -62,7 +63,7 @@ The setup uses Git's persistent non-cone sparse checkout with this allowlist:
 /uv.toml
 ```
 
-Only tracked **top-level** directories whose names begin with `_` are materialized, including future underscore-prefixed directories. Their entire contents remain available, including `_template/docs/` and the tool self-tests. Root `.gitignore` protects independent topic repositories, `.gitattributes` preserves line-ending rules, `AGENTS.md` holds framework instructions, and `uv.toml` supplies portable defaults. Git's own `.git` metadata remains. README.md and LICENSE stay present by default. Public `docs/` (including images), `.github/`, `CONTRIBUTING.md`, and development-only root settings disappear from disk without staging deletions. Read the public guides on GitHub or in your separate development clone.
+Only tracked **top-level** directories whose names begin with `_` are materialized, including future underscore-prefixed directories, with one exception: `_tests/` (test data and fixtures such as the stuck-phone-edits vault, not needed to run the tools) is left out. `uv run _tools/selftest.py` reports a skip for the fixture section when `_tests/` is absent. Their entire contents remain available, including `_template/docs/` and the tool self-tests. Root `.gitignore` protects independent topic repositories, `.gitattributes` preserves line-ending rules, `AGENTS.md` holds framework instructions, and `uv.toml` supplies portable defaults. Git's own `.git` metadata remains. README.md and LICENSE stay present by default. Public `docs/` (including images), `.github/`, `CONTRIBUTING.md`, and development-only root settings disappear from disk without staging deletions. Read the public guides on GitHub or in your separate development clone.
 
 The script requires a clean tracked working tree (except unstaged deletions of the optional root README/LICENSE when configuring minimal mode) and no unfinished merge/rebase/cherry-pick/revert. It refuses excluded framework directories containing untracked or ignored files: move those files elsewhere, then retry. It never runs `git clean` or `git reset`, never deletes local knowledge projects, and does not move their contents. A Git failure stops the script and may leave already-applied local settings in place; review its output before retrying.
 
@@ -90,7 +91,7 @@ Only README.md and LICENSE are optional; required Git rules, agent instructions 
 
 ### Updating a minimal checkout
 
-After setup, normal Git updates preserve the sparse rules:
+After setup, normal Git updates preserve the sparse rules. They do not change them, though: a checkout configured before `_tests/` existed keeps its old rules, which include every underscore folder, so run `python3 _tools/framework_checkout.py --update` once to apply the exclusion.
 
 ```sh
 git pull --ff-only

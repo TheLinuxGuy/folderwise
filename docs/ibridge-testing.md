@@ -30,7 +30,7 @@ The pinned runtime fixtures in `_tools/fixtures/obsidian_tasks_8_6_0.json` were 
 
 ### Stuck-edit fixture
 
-`_tools/fixtures/stuck_edit_vault/` preserves a real test vault whose iPhone edits got stuck, so the status report and recovery path can be tested, screenshotted and demonstrated without a phone. It holds plain files only; the self-test builds everything else in a temporary folder.
+`_tests/fixtures/stuck_edit_vault/` preserves a real test vault whose iPhone edits got stuck, so the status report and recovery path can be tested, screenshotted and demonstrated without a phone. It holds plain files only; the self-test builds everything else in a temporary folder. It lives in `_tests/`, which minimal pull-only checkouts leave out (the self-test then skips this section) and release archives include.
 
 | Path | Contents |
 | --- | --- |
@@ -64,7 +64,7 @@ Use it when a change touches the status note, the recovery callout, rejection hi
 Rules:
 
 - **Never** point the fixture's `config.json` at a real vault, run `setup` or a schedule against it, or copy the kept vault into iCloud. It is test data, not a template for a user's vault.
-- **Change the fixture only by adding or editing plain files** under `_tools/fixtures/stuck_edit_vault/`. Do not store a `.git` folder, `.DS_Store`, `.obsidian`, the generated status note, caches, local paths or real project text; the first checks in `ibridge_fixture` fail if any appear. Keep `<SOURCE>` and `<VAULT>` placeholders in `config.json`.
+- **Change the fixture only by adding or editing plain files** under `_tests/fixtures/stuck_edit_vault/`. Do not store a `.git` folder, `.DS_Store`, `.obsidian`, the generated status note, caches, local paths or real project text; the first checks in `ibridge_fixture` fail if any appear. Keep `<SOURCE>` and `<VAULT>` placeholders in `config.json`.
 - **Do not make a failing assertion pass by editing the fixture** unless the behavior change is intended. If it is, explain it in the PR and update the provenance paragraph above.
 - **Keep assertions layout-agnostic** (the status note's layout changes); assert on reasons, counts and recovery pointers rather than on exact line order.
 - **Dates are aged on load.** The test shifts ledger times and saved-copy times into the 30-day retention window, so the fixture keeps working however old it gets. Do not "refresh" the stored dates.
