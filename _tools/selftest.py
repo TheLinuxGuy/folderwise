@@ -1030,7 +1030,8 @@ def s_framework_checkout():
     for name in (".gitignore", ".gitattributes", "AGENTS.md", "uv.toml"):
         shutil.copy2(SRC_TOOLS.parent / name, upstream / name)
     put(upstream, "_tools/framework_checkout.py", (SRC_TOOLS / "framework_checkout.py").read_text())
-    for rel in ("README.md", "LICENSE", "CONTRIBUTING.md", "docs/guide.md", "docs/assets/image.png", ".github/workflows/ci.yml", "ruff.toml", "_template/starter.md"):
+    for rel in ("README.md", "LICENSE", "CONTRIBUTING.md", "docs/guide.md", "docs/assets/image.png", ".github/workflows/ci.yml", "ruff.toml", "_template/starter.md",
+                "_tests/fixtures/sample/data.json"):
         put(upstream, rel)
     g(upstream, "add", "-f", ".")
     g(upstream, "commit", "-qm", "fictional upstream")
@@ -1077,6 +1078,8 @@ def s_framework_checkout():
     check("minimal setup succeeds", rc == 0, out)
     check("minimal removes public directories and development root files", all(not (private / p).exists()
           for p in ("docs", ".github", "CONTRIBUTING.md", "ruff.toml")))
+    check("minimal leaves the _tests folder out even though it starts with an underscore", not (private / "_tests").exists()
+          and (private / "_tools").is_dir(), out)
     check("minimal keeps runtime folders and required root files", all((private / p).exists()
           for p in ("_tools", "_template", ".gitignore", ".gitattributes", "AGENTS.md", "README.md", "LICENSE", "uv.toml")))
     check("minimal checkout has a clean tracked status", g(private, "status", "--porcelain", "--untracked-files=no") == "")
@@ -1087,13 +1090,13 @@ def s_framework_checkout():
     rc, out = invoke("--minimal")
     check("minimal setup is repeatable", rc == 0, out)
 
-    for rel in ("docs/new-guide.md", ".github/new-policy.md", "website/index.html", "_future/nested/file.md"):
+    for rel in ("docs/new-guide.md", ".github/new-policy.md", "website/index.html", "_future/nested/file.md", "_tests/fixtures/sample/more.json"):
         put(upstream, rel)
     g(upstream, "add", "-f", ".")
     g(upstream, "commit", "-qm", "new framework paths")
     rc, out = run(private, "git", "pull", "--ff-only")
     check("direct git pull keeps excluded directories absent and includes future underscore folders", rc == 0
-          and all(not (private / p).exists() for p in ("docs", ".github", "website"))
+          and all(not (private / p).exists() for p in ("docs", ".github", "website", "_tests"))
           and (private / "_future/nested/file.md").is_file(), out)
     put(upstream, "_future/update.md")
     g(upstream, "add", "-f", ".")
@@ -1175,6 +1178,7 @@ def s_framework_checkout():
     check("full preview leaves the minimal layout in place", rc == 0 and not (private / "docs").exists(), out)
     rc, out = invoke("--full")
     check("full checkout can be restored without enabling pushes", rc == 0 and (private / "docs/guide.md").is_file()
+          and (private / "_tests/fixtures/sample/data.json").is_file()
           and g(private, "config", "folderwise.pullOnly") == "true"
           and g(private, "config", "folderwise.omittedRootFiles") == ""
           and all((private / name).is_file() for name in ("README.md", "LICENSE")), out)
@@ -3222,10 +3226,14 @@ elif op=='validate':
     check('doctor diagnoses automatic dates unsupported by an adapter', rc == 1 and 'adapter lacks cancelled capability' in out, out)
 
 def s_ibridge_fixture():
-    """The stuck-phone-edits fixture (_tools/fixtures/stuck_edit_vault): a real test vault whose iPhone edits were rejected ten
+    """The stuck-phone-edits fixture (_tests/fixtures/stuck_edit_vault): a real test vault whose iPhone edits were rejected ten
     times. Plain files are rebuilt into a source project, a bridge state and a vault in a temp folder (never a stored repository),
-    then the real bridge runs over them. Keep the folder with `selftest.py -k ibridge_fixture --keep` for screenshots or manual runs."""
-    fixture = CTX['tools'] / 'fixtures' / 'stuck_edit_vault'
+    then the real bridge runs over them. Keep the folder with `selftest.py -k ibridge_fixture --keep` for screenshots or manual runs.
+    Minimal pull-only checkouts leave _tests/ out, so this section reports a skip there instead of failing."""
+    fixture = SRC_TOOLS.parent / '_tests' / 'fixtures' / 'stuck_edit_vault'
+    if not fixture.is_dir():
+        print('  SKIP _tests/ is not in this checkout (minimal pull-only checkouts leave it out)', flush=True)
+        return
     root = CTX['root'] / 'fixture-sandbox'
     source, vault, home = root / 'source', root / 'vault', root / 'state'
     conf, status_file = home / 'config.json', vault / '_folderwise-sync-status.md'

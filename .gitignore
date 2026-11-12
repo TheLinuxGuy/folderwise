@@ -12,6 +12,7 @@
 !/ruff.toml
 !/_tools/
 !/_template/
+!/_tests/
 !/docs/
 
 # CI and release configuration: exact files only. Anything else under .github/ stays ignored.

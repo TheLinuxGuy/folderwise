@@ -11,7 +11,7 @@ import sys
 FILES = {'.gitignore', '.gitattributes', 'README.md', 'AGENTS.md',
          'LICENSE', 'CONTRIBUTING.md', 'uv.toml',
          '.coveragerc', 'codecov.yml', 'ruff.toml'}
-DIRECTORIES = {'_tools', '_template', 'docs'}
+DIRECTORIES = {'_tools', '_template', '_tests', 'docs'}
 # CI and release configuration is allowed by exact path only; .github/ is not an allowed directory,
 # so any other file there is rejected. Keep in sync with the .github allowlist in .gitignore
 # (the self-test checks both).
